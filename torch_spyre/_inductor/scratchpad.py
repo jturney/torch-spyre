@@ -22,6 +22,7 @@ from torch._inductor.scheduler import (
     SchedulerNode,
 )
 from torch._inductor.virtualized import V
+from . import config
 
 
 OPS_GOOD_FOR_LX_REUSE = {"input": {"sub", "div"}, "output": {"max", "sum"}}
@@ -35,7 +36,7 @@ class ScratchPadAllocator:
         # for backend usage unless specified otherwise
         if size == -1:
             size = int(
-                (2 << 20) * (1.0 - float(os.environ.get("DXP_LX_FRAC_AVAIL", "0.2")))
+                (2 << 20) * (1.0 - config.dxp_lx_frac_avail)
             )
         self.limit = size
         self.usage: dict = {}  # each record will be tensor_name:{"addr": yy, "size": zz}
