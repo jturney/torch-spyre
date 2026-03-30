@@ -159,8 +159,10 @@ def _autoload():
         from .wrapper import SpyrePythonWrapperCodegen
 
         register_backend_for_device(
-            DEVICE_NAME, SuperDSCScheduling, SpyrePythonWrapperCodegen,
-            device_custom_config=config
+            DEVICE_NAME,
+            SuperDSCScheduling,
+            SpyrePythonWrapperCodegen,
+            device_custom_config=config,
         )
 
         _autoload._ran = True

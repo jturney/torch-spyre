@@ -35,9 +35,7 @@ class ScratchPadAllocator:
         # scratch pad is 2MB = 2<<20 bytes in total. preserve total * DXP_LX_FRAC_AVAIL
         # for backend usage unless specified otherwise
         if size == -1:
-            size = int(
-                (2 << 20) * (1.0 - config.dxp_lx_frac_avail)
-            )
+            size = int((2 << 20) * (1.0 - config.dxp_lx_frac_avail))
         self.limit = size
         self.usage: dict = {}  # each record will be tensor_name:{"addr": yy, "size": zz}
         self.lx_usage_hist: list = []

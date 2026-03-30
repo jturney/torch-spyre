@@ -34,6 +34,7 @@ from torch._inductor.scheduler import (
 
 from torch._inductor.dependencies import MemoryDep
 
+from .errors import Unsupported
 from .constants import MATMUL_REDUCTION_OP, BATCH_MATMUL_OP
 from .ir import FixedTiledLayout
 from .pass_utils import SchedNodeArg, get_mem_deps, device_coordinates, iteration_space
@@ -351,6 +352,8 @@ def core_division_planning(
 ) -> list[BaseSchedulerNode]:
     # Nodes are in topological order (guaranteed by caller).
     max_cores = config.sencores
+    if max_cores > 32 or max_cores < 1:
+        raise Unsupported(f"invalid SENCORES value {max_cores}")
 
     it = iter(nodes)
     for n in it:
