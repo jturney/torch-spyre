@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import math
-import os
+
 from torch._inductor.ir import (
     ComputedBuffer,
 )
