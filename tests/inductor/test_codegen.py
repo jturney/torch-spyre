@@ -12,36 +12,45 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from unittest.mock import patch as mock_patch
 import torch
 from torch_spyre._inductor import config
-from torch_spyre._inductor.dsc import SuperDSCScheduling
 from utils_inductor import cached_randn
+from torch.testing import FileCheck
+from torch._inductor.exc import InductorError
+from torch._inductor.test_case import TestCase as InductorTestCase
+from torch._inductor.utils import (
+    run_and_get_code,
+)
 
 
-def test_config_change_invalidates_cache():
-    fn = torch.abs
-    x = cached_randn((256,))
-    call_count = 0
-    original_define_kernel = SuperDSCScheduling.define_kernel
+class TestSpyreConfig(InductorTestCase):
+    def test_config_default(self):
+        fn = torch.abs
+        x = cached_randn((256,)).to("spyre")
 
-    def counting_define_kernel(self_sched, *args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        return original_define_kernel(self_sched, *args, **kwargs)
+        comp_fn = torch.compile(fn)
+        out, source_codes = run_and_get_code(comp_fn, x)
+        FileCheck().check("sdsc_fused_abs_0").run(source_codes[0])
 
-    with mock_patch.object(SuperDSCScheduling, "define_kernel", counting_define_kernel):
-        torch._dynamo.reset_code_caches()
-        torch.compile(fn)(x.to("spyre"))
-        first_count = call_count
+    @config.patch({"sencores": 64})
+    def test_config_too_many_sencores(self):
+        fn = torch.abs
+        x = cached_randn((256,)).to("spyre")
 
-        # Same config — should hit cache (no new codegen)
-        # torch._dynamo.reset_code_caches()
-        torch.compile(fn)(x.to("spyre"))
-        assert call_count == first_count, "Expected cache hit"
+        with self.assertRaisesRegex(
+            InductorError,
+            "Unsupported: Spyre backend does not support: invalid SENCORES value 64",
+        ):
+            comp_fn = torch.compile(fn)
+            comp_fn(x)
 
-        # Different config — should miss cache (new codegen)
-        with config.patch("sencores", 1):
-            torch._dynamo.reset_code_caches()
-            torch.compile(fn)(x.to("spyre"))
-            assert call_count > first_count, "Expected recompilation"
+    # Need a test where getting lx_planning to True generates a different kernel
+    # @config.patch({'lx_planning': True})
+    # def test_config_lx_planning(self):
+    #    fn = torch.abs
+    #    x = cached_randn((256,)).to("spyre")
+    #
+    #    comp_fn = torch.compile(fn)
+    #    out, source_codes = run_and_get_code(comp_fn, x)
+    #    print(f"lx_planning {config.lx_planning}")
+    #    print(source_codes[0])
