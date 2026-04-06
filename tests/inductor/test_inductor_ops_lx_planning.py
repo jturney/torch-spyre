@@ -1,15 +1,20 @@
-import torch
 import functools
 import copy
 import torch_spyre
+import os
+import sys
 
 from torch._dynamo.testing import make_test_cls_with_patches
 
-from .test_inductor_ops import TestOps
-
 import unittest
 
-def copy_tests(my_cls, other_cls, suffix, test_failures=None, xfail_prop=None):  # noqa: B902
+_test_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.append(_test_dir)
+
+from inductor.test_inductor_ops import TestOps  # noqa: E402
+
+
+def copy_tests(my_cls, other_cls, suffix, test_failures=None, xfail_prop=None):
     for name, value in my_cls.__dict__.items():
         if name.startswith("test_"):
             # You cannot copy functions in Python, so we use closures here to
@@ -49,13 +54,15 @@ def make_lx_planning_class(cls):
         cls,
         "LxPlanning",
         "_lx_planning",
-        (torch_spyre._inductor.config, "lx_planning", True)
+        (torch_spyre._inductor.config, "lx_planning", True),
     )
 
 
 LxPlanningTemplate = make_lx_planning_class(TestOps)
 
+
 class LxPlanningTest(unittest.TestCase):
     pass
+
 
 copy_tests(LxPlanningTemplate, LxPlanningTest, "lx_planning")
