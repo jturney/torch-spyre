@@ -1,5 +1,6 @@
 import functools
 import copy
+import dataclasses
 import torch_spyre
 import os
 import sys
@@ -11,12 +12,20 @@ import unittest
 _test_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.append(_test_dir)
 
-from inductor.test_inductor_ops import TestOps  # noqa: E402
+import inductor.test_inductor_ops  # noqa: E402
+
+
+@dataclasses.dataclass
+class TestFailure:
+    suffixes: tuple[str, ...]
+    is_skip: bool = False
+    __test__: bool = False
 
 
 def copy_tests(my_cls, other_cls, suffix, test_failures=None, xfail_prop=None):
     for name, value in my_cls.__dict__.items():
         if name.startswith("test_"):
+            print(name)
             # You cannot copy functions in Python, so we use closures here to
             # create objects with different ids. Otherwise, unittest.skip
             # would modify all methods sharing the same object id. Also, by
@@ -34,6 +43,7 @@ def copy_tests(my_cls, other_cls, suffix, test_failures=None, xfail_prop=None):
                 new_test = unittest.expectedFailure(new_test)
 
             tf = test_failures and test_failures.get(name)
+            print("name", name, tf)
             if tf and suffix in tf.suffixes:
                 skip_func = (
                     unittest.skip("Skipped!")
@@ -49,20 +59,57 @@ def copy_tests(my_cls, other_cls, suffix, test_failures=None, xfail_prop=None):
         other_cls.is_dtype_supported = my_cls.is_dtype_supported
 
 
+# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_1d_dim0_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
+# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_1d_dim0_three_tensors_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
+# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_2d_dim0_diff_size_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
+# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_2d_dim0_three_tensors_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
+# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_2d_dim1_diff_size_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
+# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_3d_dim0_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
+# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_3d_dim1_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
+# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_3d_dim1_size1_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
+# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_3d_dim2_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
+# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_4d_dim0_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
+# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_4d_dim1_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
+# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_4d_dim2_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
+# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_4d_dim3_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
+
+# xfail by default, set is_skip=True to skip
+test_failures = {
+    "test_cat_1d_dim0": TestFailure(("lx_planning"), is_skip=True),
+    "test_cat_1d_dim0_three_tensors": TestFailure(("lx_planning"), is_skip=True),
+    "test_cat_2d_dim0_diff_size": TestFailure(("lx_planning"), is_skip=True),
+    "test_cat_2d_dim0_three_tensors": TestFailure(("lx_planning"), is_skip=True),
+    "test_cat_2d_dim1_diff_size": TestFailure(("lx_planning"), is_skip=True),
+    "test_cat_3d_dim0": TestFailure(("lx_planning"), is_skip=True),
+    "test_cat_3d_dim1": TestFailure(("lx_planning"), is_skip=True),
+    "test_cat_3d_dim1_size1": TestFailure(("lx_planning"), is_skip=True),
+    "test_cat_3d_dim2": TestFailure(("lx_planning"), is_skip=True),
+    "test_cat_4d_dim0": TestFailure(("lx_planning"), is_skip=True),
+    "test_cat_4d_dim1": TestFailure(("lx_planning"), is_skip=True),
+    "test_cat_4d_dim2": TestFailure(("lx_planning"), is_skip=True),
+    "test_cat_4d_dim3": TestFailure(("lx_planning"), is_skip=True),
+    "test_activation_fn_mish_fp16": TestFailure(("lx_planning"), is_skip=True),
+    "test_activation_fn_silu_fp16": TestFailure(("lx_planning"), is_skip=True),
+    "test_addmm_out_basic": TestFailure(("lx_planning"), is_skip=True),
+}
+
+
 def make_lx_planning_class(cls):
     return make_test_cls_with_patches(
         cls,
         "LxPlanning",
-        "_lx_planning",
+        "",
         (torch_spyre._inductor.config, "lx_planning", True),
     )
-
-
-LxPlanningTemplate = make_lx_planning_class(TestOps)
 
 
 class LxPlanningTest(unittest.TestCase):
     pass
 
 
-copy_tests(LxPlanningTemplate, LxPlanningTest, "lx_planning")
+copy_tests(
+    make_lx_planning_class(inductor.test_inductor_ops.TestOps),
+    LxPlanningTest,
+    "lx_planning",
+    test_failures,
+)
