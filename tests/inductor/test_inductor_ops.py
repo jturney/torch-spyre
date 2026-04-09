@@ -22,7 +22,7 @@ from utils_inductor import (
     make_param_dict,
     unique_randn_along_dim,
 )
-from utils_inductor import compare, compare_with_cpu
+import utils_inductor
 
 POINTWISE_UNARY_OPS_DICT = {
     "abs": torch.abs,
@@ -1518,6 +1518,12 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+    def compare_with_cpu(self, *args, **kwargs):
+        return utils_inductor.compare_with_cpu(*args, **kwargs)
+
+    def compare(self, *args, **kwargs):
+        return utils_inductor.compare(*args, **kwargs)
+
     @pytest.mark.filterwarnings("ignore::torch_spyre.ops.fallbacks.FallbackWarning")
     def test_unary_op(self, op, x):
         if op == torch.reciprocal:
@@ -1531,11 +1537,11 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
             torch.sin,  # CPU fallback
         }
         if op in cpu_ops:
-            compare_with_cpu(op, x)
+            self.compare_with_cpu(op, x)
         elif op == torch.neg:
-            compare_with_cpu(op, x)
+            self.compare_with_cpu(op, x)
         else:
-            compare(op, x)
+            self.compare(op, x)
 
     def test_bool(self):
         dtype = torch.bool
@@ -1559,14 +1565,14 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
 
         tensor_args = [arg for arg in args if isinstance(arg, torch.Tensor)]
 
-        compare_with_cpu(fn, *tensor_args)
+        self.compare_with_cpu(fn, *tensor_args)
 
     def test_unary_op_cpu(self, op, x):
-        compare_with_cpu(op, x)
+        self.compare_with_cpu(op, x)
 
     @pytest.mark.filterwarnings("ignore::torch_spyre.ops.fallbacks.FallbackWarning")
     def test_fallback_unary_op_cpu(self, op, x):
-        compare_with_cpu(op, x)
+        self.compare_with_cpu(op, x)
 
     def test_binary_op(self, op, a, b):
         if op == torch.div:
@@ -1575,17 +1581,17 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
             b[tiny_value_mask] = FP16_EPS
 
         if a.dtype == torch.float32:
-            compare_with_cpu(op, a, b)
+            self.compare_with_cpu(op, a, b)
         else:
-            compare(op, a, b)
+            self.compare(op, a, b)
 
     # Increased mm test tolerance for splitk
     def test_mm_relaxed(self, op, a, b):
         K = b.shape[-2]
         if K >= (128 // b.element_size()):  # multiple sticks
-            compare(op, a, b, atol=0.1, rtol=0.1)
+            self.compare(op, a, b, atol=0.1, rtol=0.1)
         else:  # single stick, no need to relax
-            compare(op, a, b)
+            self.compare(op, a, b)
 
     def test_binary_op_cpu(self, op, x, y):
         # Eager mode support varies by op:
@@ -1593,71 +1599,71 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
         # - torch.ne, torch.le: aten::ne.Tensor_out / aten::le.Tensor_out not registered
         # - torch.matmul: numerical divergence (close=False) in eager 2d case
         eager_supported = op in (torch.eq, torch.ge, torch.gt, torch.lt)
-        compare_with_cpu(op, x, y, run_eager=eager_supported)
+        self.compare_with_cpu(op, x, y, run_eager=eager_supported)
 
     def test_linear_fn(self, x, weight, bias):
         # NOTE: relaxing atol from 2e-1 to 3e-1 for multi-dim work division, single element fails without
-        compare_with_cpu(
+        self.compare_with_cpu(
             torch.nn.functional.linear, x, weight, bias, atol=3e-1, rtol=2e-1
         )
 
     @unittest.skip("deeptools: error")
     def test_add_broadcast(self, x, y):
-        compare(lambda x, y: torch.add(x[None, :], y), x, y)
+        self.compare(lambda x, y: torch.add(x[None, :], y), x, y)
 
     # Example where base function is not parameterized
     def test_add_broadcast_cpu(self, x, y):
-        compare_with_cpu(lambda x, y: torch.add(x[None, :], y), x, y)
+        self.compare_with_cpu(lambda x, y: torch.add(x[None, :], y), x, y)
 
     def test_addmm_cpu(self, input, mat1, mat2):
         # NOTE: relaxing atol from 2e-1 to 3e-1 for multi-dim work division
-        compare_with_cpu(torch.addmm, input, mat1, mat2, atol=3e-1, rtol=2e-1)
+        self.compare_with_cpu(torch.addmm, input, mat1, mat2, atol=3e-1, rtol=2e-1)
 
     def test_reduce_keepdim0_cpu(self, op, dim: int, x):
         # torch.max returns a tuple; torch.amax is not registered for Spyre eager dispatch
         if op == torch.max:
-            compare_with_cpu(
+            self.compare_with_cpu(
                 lambda x: op(x, dim=dim, keepdim=False)[0], x, run_eager=False
             )
         elif op == torch.amax:
             # aten::amax.out is not registered for the Spyre backend
-            compare_with_cpu(
+            self.compare_with_cpu(
                 lambda x: op(x, dim=dim, keepdim=False), x, run_eager=False
             )
         else:
-            compare_with_cpu(lambda x: op(x, dim=dim, keepdim=False), x)
+            self.compare_with_cpu(lambda x: op(x, dim=dim, keepdim=False), x)
 
     def test_reduce_keepdim0_cpu_no_eager(self, op, dim: int, x):
         # aten::max.dim and aten::amin are not registered for Spyre eager dispatch
         if op == torch.max:
-            compare_with_cpu(
+            self.compare_with_cpu(
                 lambda x: op(x, dim=dim, keepdim=False)[0], x, run_eager=False
             )
         else:
-            compare_with_cpu(
+            self.compare_with_cpu(
                 lambda x: op(x, dim=dim, keepdim=False), x, run_eager=False
             )
 
     def test_reduce_keepdim1_cpu(self, op, dim: int, x):
         # torch.max returns a tuple; torch.amax is not registered for Spyre eager dispatch
         if op == torch.max:
-            compare_with_cpu(
+            self.compare_with_cpu(
                 lambda x: op(x, dim=dim, keepdim=True)[0], x, run_eager=False
             )
         elif op == torch.amax:
             # aten::amax.out is not registered for the Spyre backend
-            compare_with_cpu(lambda x: op(x, dim=dim, keepdim=True), x, run_eager=False)
+            self.compare_with_cpu(lambda x: op(x, dim=dim, keepdim=True), x, run_eager=False)
         else:
-            compare_with_cpu(lambda x: op(x, dim=dim, keepdim=True), x)
+            self.compare_with_cpu(lambda x: op(x, dim=dim, keepdim=True), x)
 
     def test_reduce_keepdim1_cpu_no_eager(self, op, dim: int, x):
         # aten::max.dim and aten::amin are not registered for Spyre eager dispatch
         if op == torch.max:
-            compare_with_cpu(
+            self.compare_with_cpu(
                 lambda x: op(x, dim=dim, keepdim=True)[0], x, run_eager=False
             )
         else:
-            compare_with_cpu(lambda x: op(x, dim=dim, keepdim=True), x, run_eager=False)
+            self.compare_with_cpu(lambda x: op(x, dim=dim, keepdim=True), x, run_eager=False)
 
     def test_max_sub_broadcast(self, dim: int, x):
         def fn(x):
@@ -1665,59 +1671,59 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
             z = x - torch.unsqueeze(x_max, dim=dim)
             return z
 
-        compare(fn, x)
+        self.compare(fn, x)
 
     def test_t_1d_cpu(self, x):
-        compare_with_cpu(lambda x: x.t(), x)
+        self.compare_with_cpu(lambda x: x.t(), x)
 
     def test_t_1d_contiguous_cpu(self, x):
         # Note: .contiguous() causes issues with eager mode, see https://github.com/torch-spyre/torch-spyre/issues/1149
-        compare_with_cpu(lambda x: x.t().contiguous(), x, run_eager=False)
+        self.compare_with_cpu(lambda x: x.t().contiguous(), x, run_eager=False)
 
     def test_t_2d_cpu(self, x):
-        compare_with_cpu(lambda x: x.t(), x)
+        self.compare_with_cpu(lambda x: x.t(), x)
 
     def test_t_2d_contiguous_cpu(self, x):
         # Note: .contiguous() causes issues with eager mode, see https://github.com/torch-spyre/torch-spyre/issues/1149
-        compare_with_cpu(lambda x: x.t().contiguous(), x, run_eager=False)
+        self.compare_with_cpu(lambda x: x.t().contiguous(), x, run_eager=False)
 
     def test_transpose_2d_cpu(self, dim0: int, dim1: int, x):
-        compare_with_cpu(lambda x: torch.transpose(x, dim0, dim1), x)
+        self.compare_with_cpu(lambda x: torch.transpose(x, dim0, dim1), x)
 
     def test_transpose_2d_contiguous_cpu(self, dim0: int, dim1: int, x):
         # Note: .contiguous() causes issues with eager mode, see https://github.com/torch-spyre/torch-spyre/issues/1149
-        compare_with_cpu(
+        self.compare_with_cpu(
             lambda x: torch.transpose(x, dim0, dim1).contiguous(), x, run_eager=False
         )
 
     def test_transpose_3d_cpu(self, dim0: int, dim1: int, x):
-        compare_with_cpu(lambda x: torch.transpose(x, dim0, dim1), x)
+        self.compare_with_cpu(lambda x: torch.transpose(x, dim0, dim1), x)
 
     def test_transpose_3d_contiguous_cpu(self, dim0: int, dim1: int, x):
         # Note: .contiguous() causes issues with eager mode, see https://github.com/torch-spyre/torch-spyre/issues/1149
-        compare_with_cpu(
+        self.compare_with_cpu(
             lambda x: torch.transpose(x, dim0, dim1).contiguous(), x, run_eager=False
         )
 
     def test_transpose_4d_cpu(self, dim0: int, dim1: int, x):
-        compare_with_cpu(lambda x: torch.transpose(x, dim0, dim1), x)
+        self.compare_with_cpu(lambda x: torch.transpose(x, dim0, dim1), x)
 
     def test_transpose_4d_contiguous_cpu(self, dim0: int, dim1: int, x):
         # Note: .contiguous() causes issues with eager mode, see https://github.com/torch-spyre/torch-spyre/issues/1149
-        compare_with_cpu(
+        self.compare_with_cpu(
             lambda x: torch.transpose(x, dim0, dim1).contiguous(), x, run_eager=False
         )
 
     def test_where_cpu(self, cond_op, x, y):
         # aten::where.self is not registered for the Spyre backend
-        compare_with_cpu(
+        self.compare_with_cpu(
             lambda x, y: torch.where(cond_op(x, y), x, y), x, y, run_eager=False
         )
 
     def test_range_op(self, op, input, min, max, err):
         # aten::clamp is not registered for Spyre eager dispatch; it uses the
         # spyre::clamp custom op which only works inside torch.compile
-        compare_with_cpu(
+        self.compare_with_cpu(
             lambda x: op(x, min, max), input, atol=err, rtol=err, run_eager=False
         )
 
@@ -1725,12 +1731,12 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
         # Spyre activation custom ops (e.g. spyre::gelu) have a pass-through
         # implementation that returns None in eager mode; they only work inside
         # torch.compile where the inductor lowering handles them
-        compare_with_cpu(
+        self.compare_with_cpu(
             lambda x: op(**kwargs)(x), input, atol=err, rtol=err, run_eager=False
         )
 
     def test_activation_fn(self, op, input, err):
-        compare_with_cpu(lambda x: op(x), input, atol=err, rtol=err)
+        self.compare_with_cpu(lambda x: op(x), input, atol=err, rtol=err)
 
     @pytest.mark.filterwarnings(
         "ignore:Backend Spyre does not support int64:UserWarning"
@@ -1739,16 +1745,16 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
         # Eager clone + .cpu() causes heap corruption (invalid fastbin / corrupted
         # double-linked list) in libsenlib for fp16/fp32 small tensors, and SIGBUS
         # for bool tensors.  Disable eager mode for all dtypes.
-        compare_with_cpu(lambda a: torch.clone(a).contiguous(), x, run_eager=False)
+        self.compare_with_cpu(lambda a: torch.clone(a).contiguous(), x, run_eager=False)
 
     def test_permute(self, input_dims, dims):
-        compare_with_cpu(
+        self.compare_with_cpu(
             lambda input: torch.permute(input, dims),
             cached_randn(input_dims, dtype=torch.float16),
         )
 
     def test_dropout_functional(self, input, kwargs):
-        compare_with_cpu(lambda a: torch.nn.functional.dropout(a, **kwargs), input)
+        self.compare_with_cpu(lambda a: torch.nn.functional.dropout(a, **kwargs), input)
 
     def test_inplace_op_cpu(self, op, dst, src):
         def fn(dst, src):
@@ -1758,7 +1764,7 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
             return result
 
         # Eager mode hangs/crashes when executing inplace operations on Spyre tensors
-        compare_with_cpu(fn, dst, src, run_eager=False)
+        self.compare_with_cpu(fn, dst, src, run_eager=False)
 
     @pytest.mark.filterwarnings("ignore::torch_spyre.ops.fallbacks.FallbackWarning")
     def test_fallback_cpu(self, x):
@@ -1769,7 +1775,7 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
             return t
 
         with pytest.warns(UserWarning) as record:
-            compare_with_cpu(fn, x, cpu_compile=True)
+            self.compare_with_cpu(fn, x, cpu_compile=True)
 
         print(f"Warn {len(record)}")
 
@@ -1778,11 +1784,11 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
         def fn(device=None):
             return torch.arange(*args, dtype=torch.float16, device=device)
 
-        compare_with_cpu(fn, needs_device=True)
+        self.compare_with_cpu(fn, needs_device=True)
 
     @pytest.mark.filterwarnings("ignore::torch_spyre.ops.fallbacks.FallbackWarning")
     def test_new_ones_cpu(self, x, y):
-        compare_with_cpu(lambda x: x.new_ones((x.size())), x)
+        self.compare_with_cpu(lambda x: x.new_ones((x.size())), x)
 
     @pytest.mark.filterwarnings("ignore::torch_spyre.ops.fallbacks.FallbackWarning")
     def test_ones_cpu(self, size):
@@ -1791,23 +1797,23 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
         def fn(device=None):
             return torch.ones(size, dtype=torch.float16, device=device)
 
-        compare_with_cpu(fn, needs_device=True, cpu_compile=False)
+        self.compare_with_cpu(fn, needs_device=True, cpu_compile=False)
 
     def test_numel_cpu(self, x):
-        compare_with_cpu(lambda x: torch.numel(x), x)
+        self.compare_with_cpu(lambda x: torch.numel(x), x)
 
     def test_cat_cpu(self, dim, *tensors):
         def fn(*tensors):
             return torch.cat(tensors, dim=dim)
 
-        compare_with_cpu(fn, *tensors)
+        self.compare_with_cpu(fn, *tensors)
 
     @pytest.mark.filterwarnings("ignore::torch_spyre.ops.fallbacks.FallbackWarning")
     def test_full_cpu(self, *args):
         def fn(device=None):
             return torch.full(*args, dtype=torch.float16, device=device)
 
-        compare_with_cpu(fn, needs_device=True, cpu_compile=False)
+        self.compare_with_cpu(fn, needs_device=True, cpu_compile=False)
 
     def test_dim_op_cpu(self, op, dim, *args):
         def fn(*args):
@@ -1816,14 +1822,14 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
         # Combined ops (exp+squeeze, exp+unsqueeze, add+unsqueeze) fail in eager
         # because the eager exp/add dispatch internally triggers torch.compile on
         # shapes that the Spyre backend compiler cannot handle
-        compare_with_cpu(fn, *args, run_eager=False)
+        self.compare_with_cpu(fn, *args, run_eager=False)
 
     def test_dim_op_cpu_eager(self, op, dim, *args):
         def fn(*args):
             return op(dim, *args)
 
         # Simple dim ops (softmax, squeeze, unsqueeze, sum+squeeze) work in eager
-        compare_with_cpu(fn, *args)
+        self.compare_with_cpu(fn, *args)
 
     def test_attention_cpu(self, *args):
         def fn(q, k, v, sm_scale):
@@ -1833,7 +1839,7 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
 
         # mm/bmm on Spyre tensors segfaults in libsenlib without the torch.compile
         # execution context that normally initialises the hardware session
-        compare_with_cpu(fn, *args, run_eager=False)
+        self.compare_with_cpu(fn, *args, run_eager=False)
 
     def test_layernorm_cpu(self, input, weight, bias):
         def fn(input, weight, bias):
@@ -1841,14 +1847,14 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
                 input, input.shape[1:], weight=weight, bias=bias
             )
 
-        compare_with_cpu(fn, input, weight, bias)
+        self.compare_with_cpu(fn, input, weight, bias)
 
     @pytest.mark.filterwarnings("ignore::torch_spyre.ops.fallbacks.FallbackWarning")
     def test_rmsnorm_cpu(self, x):
         def fn(input):
             return torch.nn.functional.rms_norm(input, [input.shape[-1]], eps=1e-6)
 
-        compare_with_cpu(fn, x)
+        self.compare_with_cpu(fn, x)
 
     def test_softplus_cpu(self, x):
         beta = 1.0
@@ -1857,21 +1863,21 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
         def fn(input):
             return torch.nn.functional.softplus(input, beta, threshold)
 
-        compare_with_cpu(fn, x)
+        self.compare_with_cpu(fn, x)
 
     # --- Migrated from test_ops.py ---
 
     def test_copy_roundtrip(self, x):
-        compare_with_cpu(lambda x: x, x)
+        self.compare_with_cpu(lambda x: x, x)
 
     def test_mean_cpu(self, dim, keepdim, x):
-        compare_with_cpu(lambda x: torch.mean(x, dim=dim, keepdim=keepdim), x)
+        self.compare_with_cpu(lambda x: torch.mean(x, dim=dim, keepdim=keepdim), x)
 
     def test_zeros_cpu(self, size):
         def fn(device=None):
             return torch.zeros(*size, dtype=torch.float16, device=device)
 
-        compare_with_cpu(fn, needs_device=True, cpu_compile=False)
+        self.compare_with_cpu(fn, needs_device=True, cpu_compile=False)
 
     def test_fill_scalar_cpu(self, value, x):
         def fn(x):
@@ -1880,11 +1886,11 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
             return x
 
         # spyre__fill_scalar crashes with SIGBUS in eager mode
-        compare_with_cpu(fn, x, run_eager=False)
+        self.compare_with_cpu(fn, x, run_eager=False)
 
     @pytest.mark.filterwarnings("ignore::torch_spyre.ops.fallbacks.FallbackWarning")
     def test_addmm_scaled_cpu(self, alpha, input, mat1, mat2):
-        compare_with_cpu(
+        self.compare_with_cpu(
             lambda input, mat1, mat2: torch.addmm(input, mat1, mat2, alpha=alpha),
             input,
             mat1,
@@ -1901,11 +1907,11 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
             torch.addmm(input, mat1, mat2, out=out)
             return out
 
-        compare_with_cpu(fn, input, mat1, mat2, atol=2e-1, rtol=2e-1)
+        self.compare_with_cpu(fn, input, mat1, mat2, atol=2e-1, rtol=2e-1)
 
     @pytest.mark.filterwarnings("ignore::torch_spyre.ops.fallbacks.FallbackWarning")
     def test_embedding_cpu(self, indices, weight, padding_idx):
-        compare_with_cpu(
+        self.compare_with_cpu(
             lambda indices, weight: torch.nn.functional.embedding(
                 indices, weight, padding_idx=padding_idx
             ),
@@ -1915,7 +1921,7 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
 
     @pytest.mark.filterwarnings("ignore::torch_spyre.ops.fallbacks.FallbackWarning")
     def test_isin_cpu(self, elements, test_elements):
-        compare_with_cpu(torch.isin, elements, test_elements)
+        self.compare_with_cpu(torch.isin, elements, test_elements)
 
     @pytest.mark.filterwarnings("ignore::torch_spyre.ops.fallbacks.FallbackWarning")
     def test_isin_out_cpu(self, elements, test_elements):
@@ -1924,7 +1930,7 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
             torch.isin(elements, test_elements, out=out)
             return out
 
-        compare_with_cpu(fn, elements, test_elements)
+        self.compare_with_cpu(fn, elements, test_elements)
 
     @pytest.mark.filterwarnings("ignore::torch_spyre.ops.fallbacks.FallbackWarning")
     def test_isin_tensor_scalar_cpu(self):
@@ -2011,14 +2017,14 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
         def fn(input):
             return torch.tril(input)
 
-        compare_with_cpu(fn, x)
+        self.compare_with_cpu(fn, x)
 
     @pytest.mark.filterwarnings("ignore::torch_spyre.ops.fallbacks.FallbackWarning")
     def test_triu_cpu(self, x, diagonal):
         def fn(input, diagonal):
             return torch.triu(input, diagonal)
 
-        compare_with_cpu(fn, x, diagonal)
+        self.compare_with_cpu(fn, x, diagonal)
 
     @pytest.mark.filterwarnings("ignore::torch_spyre.ops.fallbacks.FallbackWarning")
     def test_sdpa_cpu(self, q, k, v, attn_mask, is_causal, enable_gqa):
@@ -2027,7 +2033,7 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
                 q, k, v, attn_mask, is_causal=is_causal, enable_gqa=enable_gqa
             )
 
-        compare_with_cpu(fn, q, k, v, attn_mask, is_causal, enable_gqa)
+        self.compare_with_cpu(fn, q, k, v, attn_mask, is_causal, enable_gqa)
 
     @pytest.mark.filterwarnings("ignore::torch_spyre.ops.fallbacks.FallbackWarning")
     def test_implicit_loading(self):
@@ -2048,7 +2054,7 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
             def fn(t):
                 return t.item()
 
-            compare_with_cpu(fn, x, cpu_compile=False)
+            self.compare_with_cpu(fn, x, cpu_compile=False)
 
         elif len(args) == 2:
             x, y = args
@@ -2057,7 +2063,7 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
                 result = a * b
                 return result.item()
 
-            compare_with_cpu(fn, x, y, cpu_compile=False)
+            self.compare_with_cpu(fn, x, y, cpu_compile=False)
 
 
 if __name__ == "__main__":
