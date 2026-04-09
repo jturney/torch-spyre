@@ -106,6 +106,7 @@ def make_lx_planning_class(cls):
         "LxPlanning",
         "",
         (torch_spyre._inductor.config, "lx_planning", True),
+        (torch_spyre._inductor.config, "allow_all_ops_in_lx_planning", True),
     )
 
 
