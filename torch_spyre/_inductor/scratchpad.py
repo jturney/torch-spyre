@@ -114,7 +114,7 @@ class ScratchPadAllocator:
             # Decide whether to reuse. For now, only allow ops we've tested successfully.
             # TODO may be able to generalize this decision in buf end-of-life analysis
             in_or_out = "input" if needed["is_input"] else "output"
-            can_reuse = any(
+            can_reuse = config.allow_all_ops_in_lx_planning or any(
                 op in org_op_name for op in OPS_GOOD_FOR_LX_REUSE[in_or_out]
             )
             # Special cases check:
