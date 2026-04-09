@@ -4,6 +4,9 @@ import dataclasses
 import torch_spyre
 import os
 import sys
+import inspect
+import torch
+from torch.utils import _pytree as pytree
 
 from torch._dynamo.testing import make_test_cls_with_patches
 
@@ -14,6 +17,7 @@ sys.path.append(_test_dir)
 
 import inductor.test_inductor_ops  # noqa: E402
 
+import utils_inductor
 
 @dataclasses.dataclass
 class TestFailure:
@@ -25,7 +29,9 @@ class TestFailure:
 def copy_tests(my_cls, other_cls, suffix, test_failures=None, xfail_prop=None):
     for name, value in my_cls.__dict__.items():
         if name.startswith("test_"):
-            print(name)
+            if "compare" not in inspect.getsource(value):
+                continue
+
             # You cannot copy functions in Python, so we use closures here to
             # create objects with different ids. Otherwise, unittest.skip
             # would modify all methods sharing the same object id. Also, by
@@ -90,8 +96,21 @@ def make_lx_planning_class(cls):
 
 
 class LxPlanningTest(unittest.TestCase):
-    pass
+    def compare_with_cpu(self, fn, *args, **kwargs):
+        kwargs["cpu_compile"] = False
+        @functools.wraps(fn)
+        def make_seq_of_ops(*fn_args, **fn_kwargs):
+            result = fn(*fn_args, **fn_kwargs)
+            return pytree.tree_map(lambda x: x + x if isinstance(x, torch.Tensor) else x, result)
+        return utils_inductor.compare_with_cpu(make_seq_of_ops, *args, **kwargs)
 
+    def compare(self, fn, *args, atol=0.0, rtol=0.0, cpu_atol=0.1, cpu_rtol=0.1, needs_device=False):
+        # utils_inductor.compare spyre with cpu and sendnn, here we skip sendnn
+        @functools.wraps(fn)
+        def make_seq_of_ops(*fn_args, **fn_kwargs):
+            result = fn(*fn_args, **fn_kwargs)
+            return pytree.tree_map(lambda x: x + x if isinstance(x, torch.Tensor) else x, result)
+        return utils_inductor.compare_with_cpu(make_seq_of_ops, *args, atol=cpu_atol, rtol=cpu_rtol, needs_device=needs_device, cpu_compile=False)
 
 copy_tests(
     make_lx_planning_class(inductor.test_inductor_ops.TestOps),
