@@ -3097,7 +3097,9 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
     def test_reduce_keepdim1_cpu(self, op, dim: int, x):
         if op == torch.amax or op == torch.max:
             # aten::amax.out is not registered for the Spyre backend
-            self.compare_with_cpu(lambda x: op(x, dim=dim, keepdim=True), x, run_eager=False)
+            self.compare_with_cpu(
+                lambda x: op(x, dim=dim, keepdim=True), x, run_eager=False
+            )
         else:
             self.compare_with_cpu(lambda x: op(x, dim=dim, keepdim=True), x)
 
@@ -3110,7 +3112,9 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
                 lambda x: op(x, dim=dim, keepdim=True)[0], x, run_eager=False
             )
         else:
-            self.compare_with_cpu(lambda x: op(x, dim=dim, keepdim=True), x, run_eager=False)
+            self.compare_with_cpu(
+                lambda x: op(x, dim=dim, keepdim=True), x, run_eager=False
+            )
 
     def test_topk_cpu(self, x, k: int, dim: int):
         # torch.topk returns (values, indices); only compare values since
