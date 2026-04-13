@@ -107,10 +107,11 @@ def make_lx_planning_class(cls):
         "",
         (torch_spyre._inductor.config, "lx_planning", True),
         (torch_spyre._inductor.config, "allow_all_ops_in_lx_planning", True),
+        (torch_spyre._inductor.config, "sencores", 1),
     )
 
 
-class LxPlanningTest(unittest.TestCase):
+class LxPlanningTwoOpPointwiseTest(unittest.TestCase):
     def compare_with_cpu(self, fn, *args, **kwargs):
         kwargs["cpu_compile"] = False
         @functools.wraps(fn)
@@ -127,9 +128,33 @@ class LxPlanningTest(unittest.TestCase):
             return pytree.tree_map(lambda x: x + x if isinstance(x, torch.Tensor) else x, result)
         return utils_inductor.compare_with_cpu(make_seq_of_ops, *args, atol=cpu_atol, rtol=cpu_rtol, needs_device=needs_device, cpu_compile=False)
 
+
+class LxPlanningTwoOpReductionTest(unittest.TestCase):
+    def compare_with_cpu(self, fn, *args, **kwargs):
+        kwargs["cpu_compile"] = False
+        @functools.wraps(fn)
+        def make_seq_of_ops(*fn_args, **fn_kwargs):
+            result = fn(*fn_args, **fn_kwargs)
+            return pytree.tree_map(lambda x: torch.sum(x, dim=0) if isinstance(x, torch.Tensor) and x.dtype == torch.float16 else x, result)
+        return utils_inductor.compare_with_cpu(make_seq_of_ops, *args, **kwargs)
+
+    def compare(self, fn, *args, atol=0.0, rtol=0.0, cpu_atol=0.1, cpu_rtol=0.1, needs_device=False):
+        # utils_inductor.compare spyre with cpu and sendnn, here we skip sendnn
+        @functools.wraps(fn)
+        def make_seq_of_ops(*fn_args, **fn_kwargs):
+            result = fn(*fn_args, **fn_kwargs)
+            return pytree.tree_map(lambda x: torch.sum(x, dim=0) if isinstance(x, torch.Tensor) and x.dtype == torch.float16 else x, result)
+        return utils_inductor.compare_with_cpu(make_seq_of_ops, *args, atol=cpu_atol, rtol=cpu_rtol, needs_device=needs_device, cpu_compile=False)
+
 copy_tests(
     make_lx_planning_class(inductor.test_inductor_ops.TestOps),
-    LxPlanningTest,
-    "lx_planning",
+    LxPlanningTwoOpPointwiseTest,
+    "lx_planning_pointwise",
+    test_failures,
+)
+copy_tests(
+    make_lx_planning_class(inductor.test_inductor_ops.TestOps),
+    LxPlanningTwoOpReductionTest,
+    "lx_planning_reduction",
     test_failures,
 )
