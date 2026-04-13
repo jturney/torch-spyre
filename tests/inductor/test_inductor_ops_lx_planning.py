@@ -59,20 +59,6 @@ def copy_tests(my_cls, other_cls, suffix, test_failures=None, xfail_prop=None):
         other_cls.is_dtype_supported = my_cls.is_dtype_supported
 
 
-# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_1d_dim0_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
-# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_1d_dim0_three_tensors_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
-# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_2d_dim0_diff_size_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
-# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_2d_dim0_three_tensors_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
-# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_2d_dim1_diff_size_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
-# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_3d_dim0_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
-# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_3d_dim1_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
-# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_3d_dim1_size1_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
-# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_3d_dim2_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
-# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_4d_dim0_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
-# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_4d_dim1_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
-# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_4d_dim2_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
-# FAILED tests/inductor/test_inductor_ops_lx_planning.py::LxPlanningTest::test_cat_4d_dim3_lx_planning - torch._inductor.exc.InductorError: AttributeError: 'NoneType' object has no attribute 'name'
-
 # xfail by default, set is_skip=True to skip
 test_failures = {
     "test_cat_1d_dim0": TestFailure(("lx_planning"), is_skip=True),

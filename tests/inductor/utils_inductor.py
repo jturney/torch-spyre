@@ -403,6 +403,7 @@ def _compile_and_run(fn, args, device, backend=None, needs_device=False, compile
     device_kwargs = {"device": device} if needs_device else {}
 
     if compile:
+        print(f"backend {backend}")
         if backend:
             result = torch.compile(fn, backend=backend)(*device_args, **device_kwargs)
         else:
