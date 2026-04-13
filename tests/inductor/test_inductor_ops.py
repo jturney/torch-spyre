@@ -1687,7 +1687,9 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
             )
         elif op == torch.amax:
             # aten::amax.out is not registered for the Spyre backend
-            self.compare_with_cpu(lambda x: op(x, dim=dim, keepdim=True), x, run_eager=False)
+            self.compare_with_cpu(
+                lambda x: op(x, dim=dim, keepdim=True), x, run_eager=False
+            )
         else:
             self.compare_with_cpu(lambda x: op(x, dim=dim, keepdim=True), x)
 
@@ -1698,7 +1700,9 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
                 lambda x: op(x, dim=dim, keepdim=True)[0], x, run_eager=False
             )
         else:
-            self.compare_with_cpu(lambda x: op(x, dim=dim, keepdim=True), x, run_eager=False)
+            self.compare_with_cpu(
+                lambda x: op(x, dim=dim, keepdim=True), x, run_eager=False
+            )
 
     def test_max_sub_broadcast(self, dim: int, x):
         def fn(x):
@@ -1850,7 +1854,7 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
         def fn(x):
             return torch.nn.functional.pad(x, pad)
 
-        compare_with_cpu(fn, x)
+        self.compare_with_cpu(fn, x)
 
     def test_pad_unsupported(self):
         """Padding cases that raise Unsupported due to logical decomposition constraints."""
