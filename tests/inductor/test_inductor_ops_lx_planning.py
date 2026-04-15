@@ -7,6 +7,7 @@ import sys
 import inspect
 import torch
 from torch.utils import _pytree as pytree
+import utils_inductor
 
 from torch._dynamo.testing import make_test_cls_with_patches
 
@@ -17,7 +18,6 @@ sys.path.append(_test_dir)
 
 import inductor.test_inductor_ops  # noqa: E402
 
-import utils_inductor
 
 @dataclasses.dataclass
 class TestFailure:
@@ -49,7 +49,7 @@ def copy_tests(my_cls, other_cls, suffix, test_failures=None, xfail_prop=None):
                 new_test = unittest.expectedFailure(new_test)
 
             tf = test_failures and test_failures.get(name)
-            print("name", name, tf)
+            # print("name", name, tf)
             if tf and suffix in tf.suffixes:
                 skip_func = (
                     unittest.skip("Skipped!")
@@ -99,19 +99,43 @@ def make_lx_planning_class(cls):
 class LxPlanningTest(unittest.TestCase):
     def compare_with_cpu(self, fn, *args, **kwargs):
         kwargs["cpu_compile"] = False
+
         @functools.wraps(fn)
         def make_seq_of_ops(*fn_args, **fn_kwargs):
             result = fn(*fn_args, **fn_kwargs)
-            return pytree.tree_map(lambda x: x + x if isinstance(x, torch.Tensor) else x, result)
+            return pytree.tree_map(
+                lambda x: x + x if isinstance(x, torch.Tensor) else x, result
+            )
+
         return utils_inductor.compare_with_cpu(make_seq_of_ops, *args, **kwargs)
 
-    def compare(self, fn, *args, atol=0.0, rtol=0.0, cpu_atol=0.1, cpu_rtol=0.1, needs_device=False):
+    def compare(
+        self,
+        fn,
+        *args,
+        atol=0.0,
+        rtol=0.0,
+        cpu_atol=0.1,
+        cpu_rtol=0.1,
+        needs_device=False,
+    ):
         # utils_inductor.compare spyre with cpu and sendnn, here we skip sendnn
         @functools.wraps(fn)
         def make_seq_of_ops(*fn_args, **fn_kwargs):
             result = fn(*fn_args, **fn_kwargs)
-            return pytree.tree_map(lambda x: x + x if isinstance(x, torch.Tensor) else x, result)
-        return utils_inductor.compare_with_cpu(make_seq_of_ops, *args, atol=cpu_atol, rtol=cpu_rtol, needs_device=needs_device, cpu_compile=False)
+            return pytree.tree_map(
+                lambda x: x + x if isinstance(x, torch.Tensor) else x, result
+            )
+
+        return utils_inductor.compare_with_cpu(
+            make_seq_of_ops,
+            *args,
+            atol=cpu_atol,
+            rtol=cpu_rtol,
+            needs_device=needs_device,
+            cpu_compile=False,
+        )
+
 
 copy_tests(
     make_lx_planning_class(inductor.test_inductor_ops.TestOps),
