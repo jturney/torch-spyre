@@ -1180,9 +1180,7 @@ REDUCTION_TEST_FAILURES = {
 
 
 class LxPlanningTwoOpReductionTest(unittest.TestCase):
-    def compare_with_cpu(self, fn, *args, **kwargs):
-        kwargs["cpu_compile"] = False
-
+    def wrap_reduction(self, fn):
         @functools.wraps(fn)
         def make_seq_of_ops(*fn_args, **fn_kwargs):
             result = fn(*fn_args, **fn_kwargs)
@@ -1193,7 +1191,11 @@ class LxPlanningTwoOpReductionTest(unittest.TestCase):
                 result,
             )
 
-        return compare_with_cpu(make_seq_of_ops, *args, **kwargs)
+        return make_seq_of_ops
+
+    def compare_with_cpu(self, fn, *args, **kwargs):
+        kwargs["cpu_compile"] = False
+        return compare_with_cpu(self.wrap_reduction(fn), *args, **kwargs)
 
     def compare(
         self,
@@ -1205,19 +1207,8 @@ class LxPlanningTwoOpReductionTest(unittest.TestCase):
         cpu_rtol=0.1,
         needs_device=False,
     ):
-        # utils_inductor.compare spyre with cpu and sendnn, here we skip sendnn
-        @functools.wraps(fn)
-        def make_seq_of_ops(*fn_args, **fn_kwargs):
-            result = fn(*fn_args, **fn_kwargs)
-            return pytree.tree_map(
-                lambda x: torch.sum(x, dim=0)
-                if isinstance(x, torch.Tensor) and x.dtype == torch.float16
-                else x,
-                result,
-            )
-
         return compare_with_cpu(
-            make_seq_of_ops,
+            self.wrap_reduction(fn),
             *args,
             atol=cpu_atol,
             rtol=cpu_rtol,
