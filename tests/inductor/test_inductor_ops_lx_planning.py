@@ -616,9 +616,7 @@ POINTWISE_TEST_FAILURES = {
 
 
 class LxPlanningTwoOpPointwiseTest(unittest.TestCase):
-    def compare_with_cpu(self, fn, *args, **kwargs):
-        kwargs["cpu_compile"] = False
-
+    def wrap_pointwise(self, fn):
         @functools.wraps(fn)
         def make_seq_of_ops(*fn_args, **fn_kwargs):
             result = fn(*fn_args, **fn_kwargs)
@@ -626,7 +624,11 @@ class LxPlanningTwoOpPointwiseTest(unittest.TestCase):
                 lambda x: x + x if isinstance(x, torch.Tensor) else x, result
             )
 
-        return compare_with_cpu(make_seq_of_ops, *args, **kwargs)
+        return make_seq_of_ops
+
+    def compare_with_cpu(self, fn, *args, **kwargs):
+        kwargs["cpu_compile"] = False
+        return compare_with_cpu(self.wrap_pointwise(fn), *args, **kwargs)
 
     def compare(
         self,
@@ -638,16 +640,8 @@ class LxPlanningTwoOpPointwiseTest(unittest.TestCase):
         cpu_rtol=0.1,
         needs_device=False,
     ):
-        # utils_inductor.compare spyre with cpu and sendnn, here we skip sendnn
-        @functools.wraps(fn)
-        def make_seq_of_ops(*fn_args, **fn_kwargs):
-            result = fn(*fn_args, **fn_kwargs)
-            return pytree.tree_map(
-                lambda x: x + x if isinstance(x, torch.Tensor) else x, result
-            )
-
         return compare_with_cpu(
-            make_seq_of_ops,
+            self.wrap_pointwise(fn),
             *args,
             atol=cpu_atol,
             rtol=cpu_rtol,
