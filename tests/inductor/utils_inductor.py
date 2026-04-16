@@ -559,7 +559,6 @@ def copy_tests(my_cls, other_cls, suffix, test_failures=None, xfail_prop=None):
                 new_test = unittest.expectedFailure(new_test)
 
             tf = test_failures and test_failures.get(name)
-            print("name", name, tf)
             if tf and suffix in tf.suffixes:
                 skip_func = (
                     unittest.skip("Skipped!")
