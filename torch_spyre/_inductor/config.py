@@ -18,6 +18,9 @@ import sys
 from torch.utils._config_module import install_config_module
 
 lx_planning: bool = os.environ.get("LX_PLANNING", "0") == "1"
+tests_lx_planning_run_skips: bool = (
+    os.environ.get("TEST_LX_PLANNING_RUN_SKIPS", "0") == "1"
+)
 
 allow_all_ops_in_lx_planning: bool = False
 
