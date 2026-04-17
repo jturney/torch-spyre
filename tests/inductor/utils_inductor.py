@@ -536,7 +536,7 @@ class TestFailure:
     __test__: bool = False
 
 
-def copy_tests(my_cls, other_cls, suffix, test_failures=None, xfail_prop=None):
+def copy_tests(my_cls, other_cls, suffix, test_skips=None, xfail=None):
     for name, value in my_cls.__dict__.items():
         if name.startswith("test_"):
             if "compare" not in inspect.getsource(value):
@@ -555,16 +555,11 @@ def copy_tests(my_cls, other_cls, suffix, test_failures=None, xfail_prop=None):
             # Copy __dict__ which may contain test metadata
             new_test.__dict__ = copy.deepcopy(value.__dict__)
 
-            if xfail_prop is not None and hasattr(value, xfail_prop):
+            if xfail is not None and name in xfail:
                 new_test = unittest.expectedFailure(new_test)
 
-            tf = test_failures and test_failures.get(name)
-            if tf and suffix in tf.suffixes:
-                skip_func = (
-                    unittest.skip("Skipped!")
-                    if tf.is_skip
-                    else unittest.expectedFailure
-                )
+            if test_skips is not None and name in test_skips:
+                skip_func = unittest.skip("Skipped!")
                 new_test = skip_func(new_test)
 
             setattr(other_cls, f"{name}_{suffix}", new_test)
