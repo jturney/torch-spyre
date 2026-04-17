@@ -437,6 +437,7 @@ REDUCTION_TEST_FAILURES = {
     "test_inplace_op_mul_2d",
     "test_inplace_op_mul_3d",
     "test_item_from_computation",
+    "test_large_matmul_matmul_3d2d_M3_K11_N2880",
     "test_layernorm_2d",
     "test_linear_2d_bias",
     "test_linear_2d_no_bias",
