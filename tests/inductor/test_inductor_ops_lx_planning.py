@@ -1,6 +1,5 @@
 import functools
 import torch_spyre
-from torch_spyre._inductor import config
 import os
 import sys
 import torch
@@ -16,6 +15,9 @@ sys.path.append(_test_dir)
 
 import inductor.test_inductor_ops  # noqa: E402
 
+tests_lx_planning_run_skips: bool = (
+    os.environ.get("TEST_LX_PLANNING_RUN_SKIPS", "0") == "1"
+)
 
 # xfail by default, set is_skip=True to skip
 test_failures = {
@@ -656,7 +658,7 @@ copy_tests(
     make_lx_planning_class(inductor.test_inductor_ops.TestOps),
     LxPlanningTwoOpPointwiseAdditionTest,
     "lx_planning_pointwise",
-    POINTWISE_TEST_FAILURES if not config.tests_lx_planning_run_skips else None,
+    POINTWISE_TEST_FAILURES if not tests_lx_planning_run_skips else None,
 )
 
 
@@ -1414,9 +1416,7 @@ copy_tests(
     make_lx_planning_class(inductor.test_inductor_ops.TestOps),
     LxPlanningTwoOpPointwiseSubtractionTest,
     "lx_planning_pointwise_subtraction",
-    POINTWISE_SUBTRACTION_TEST_FAILURES
-    if not config.tests_lx_planning_run_skips
-    else None,
+    POINTWISE_SUBTRACTION_TEST_FAILURES if not tests_lx_planning_run_skips else None,
 )
 
 
@@ -1977,5 +1977,5 @@ copy_tests(
     make_lx_planning_class(inductor.test_inductor_ops.TestOps),
     LxPlanningTwoOpReductionTest,
     "lx_planning_reduction",
-    REDUCTION_TEST_FAILURES if not config.tests_lx_planning_run_skips else None,
+    REDUCTION_TEST_FAILURES if not tests_lx_planning_run_skips else None,
 )
