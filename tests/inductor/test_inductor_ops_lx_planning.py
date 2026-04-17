@@ -8,7 +8,7 @@ from torch.utils import _pytree as pytree
 from torch._dynamo.testing import make_test_cls_with_patches
 
 import unittest
-from utils_inductor import compare_with_cpu, copy_tests, TestFailure
+from utils_inductor import compare_with_cpu, copy_tests
 
 _test_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.append(_test_dir)
@@ -18,26 +18,6 @@ import inductor.test_inductor_ops  # noqa: E402
 tests_lx_planning_run_skips: bool = (
     os.environ.get("TEST_LX_PLANNING_RUN_SKIPS", "0") == "1"
 )
-
-# xfail by default, set is_skip=True to skip
-test_failures = {
-    "test_cat_1d_dim0": TestFailure(("lx_planning"), is_skip=True),
-    "test_cat_1d_dim0_three_tensors": TestFailure(("lx_planning"), is_skip=True),
-    "test_cat_2d_dim0_diff_size": TestFailure(("lx_planning"), is_skip=True),
-    "test_cat_2d_dim0_three_tensors": TestFailure(("lx_planning"), is_skip=True),
-    "test_cat_2d_dim1_diff_size": TestFailure(("lx_planning"), is_skip=True),
-    "test_cat_3d_dim0": TestFailure(("lx_planning"), is_skip=True),
-    "test_cat_3d_dim1": TestFailure(("lx_planning"), is_skip=True),
-    "test_cat_3d_dim1_size1": TestFailure(("lx_planning"), is_skip=True),
-    "test_cat_3d_dim2": TestFailure(("lx_planning"), is_skip=True),
-    "test_cat_4d_dim0": TestFailure(("lx_planning"), is_skip=True),
-    "test_cat_4d_dim1": TestFailure(("lx_planning"), is_skip=True),
-    "test_cat_4d_dim2": TestFailure(("lx_planning"), is_skip=True),
-    "test_cat_4d_dim3": TestFailure(("lx_planning"), is_skip=True),
-    "test_activation_fn_mish_fp16": TestFailure(("lx_planning"), is_skip=True),
-    "test_activation_fn_silu_fp16": TestFailure(("lx_planning"), is_skip=True),
-    "test_addmm_out_basic": TestFailure(("lx_planning"), is_skip=True),
-}
 
 
 def make_lx_planning_class(cls):
@@ -51,572 +31,294 @@ def make_lx_planning_class(cls):
     )
 
 
-POINTWISE_TEST_FAILURES = {
-    "test_add_broadcast_cpu_256_67x256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_addmm_1152_10x1152_1152x1152": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_addmm_out_basic": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_addmm_scaled_alpha_0_5": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_alias_operands_cpu_pow_67x71x256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_alias_operands_cube_256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_alias_operands_cube_67x256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_alias_operands_cube_67x71x256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_alias_operands_double_67x71x256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_alias_operands_square_67x71x256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_alias_operands_triple_256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_alias_operands_triple_67x256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_alias_operands_triple_67x71x256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_attention_3d_batch_size_1": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_attention_3d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_attention_4d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_bmm_bmm_2x256x1_2x1x128": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_bmm_bmm_2x55x2_2x2x99": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_bmm_bmm_2x99x65_2x65x55": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_bmm_bmm_3x17x256_3x256x128": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_bmm_bmm_3x1x256_3x256x128": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_cat_1d_dim0": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cat_1d_dim0_three_tensors": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_cat_2d_dim0_diff_size": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cat_2d_dim0_three_tensors": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_cat_2d_dim1_diff_size": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cat_3d_dim0": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cat_3d_dim1": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cat_3d_dim1_size1": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cat_3d_dim2": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cat_4d_dim0": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cat_4d_dim1": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cat_4d_dim2": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cat_4d_dim3_fp32": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cat_4d_dim3": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_clone_bool_1d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_clone_bool_2d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_clone_bool_3d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_eq_1d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_eq_2d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_eq_3d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_eq_broadcast": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_ge_1d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_ge_2d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_ge_3d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_ge_broadcast": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_gt_1d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_gt_2d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_gt_3d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_gt_broadcast": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_le_1d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_le_2d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_le_3d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_le_broadcast": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_lt_1d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_lt_2d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_lt_3d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_lt_broadcast": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_ne_1d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_ne_2d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_ne_3d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_cmp_ne_broadcast": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_fallback_1d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_fallback_2d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_fallback_3d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_full_value_1": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_full_value_2": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_inplace_copy_copy_bool": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_inplace_op_add_1d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_inplace_op_add_2d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_inplace_op_add_3d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_inplace_op_mul_1d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_inplace_op_mul_2d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_inplace_op_mul_3d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_isin_out_tensor_tensor": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_isin_tensor_tensor": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_item_from_computation": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_layernorm_2d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_linear_2d_bias": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_linear_2d_no_bias": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_linear_3d_bias": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_linear_3d_no_bias": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_logical_not_logical_not_1d_bool": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_logical_not_logical_not_1d_fp16": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_logical_not_logical_not_2d_bool": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_logical_not_logical_not_2d_fp16": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_logical_not_logical_not_3d_bool": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_logical_not_logical_not_3d_fp16": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_logical_not_logical_not_4d_bool": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_logical_not_logical_not_4d_fp16": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_logical_not_logical_not_bool_single_elem": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_logical_not_logical_not_fp16_single_elem": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_matmul_matmul_2x3x55x2_2x3x2x99": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_matmul_matmul_2x3x99x1_2x3x1x55": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_matmul_matmul_2x3x99x65_2x3x65x55": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_matmul_matmul_2x55x2_2x2x99": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_matmul_matmul_2x64x128_128x16384": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_matmul_matmul_2x99x1_1x55": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_matmul_matmul_2x99x1_2x1x55": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_matmul_matmul_2x99x65_2x65x55": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_matmul_matmul_3x17x256_3x256x128": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_matmul_matmul_3x18x128x256_3x18x256x128": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_matmul_matmul_3x1x256_3x256x128": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_matmul_matmul_512x256_256x128": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_matmul_matmul_55x2_2x99": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_matmul_matmul_99x1_1x55": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_matmul_matmul_99x65_65x55": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_2d_dim_0": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_2d_dim_1": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_3d_dim_1": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_3d_dim_2": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_4d_dim_0": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_4d_dim_1": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_4d_dim_2": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_4d_dim_3": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_2d_dim_0": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_2d_dim_1": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_3d_dim_0": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_3d_dim_1": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_3d_dim_2": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_4d_dim_0": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_4d_dim_1": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_4d_dim_2": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_4d_dim_3": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_max_sub_broadcast_2d_dim_0": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_max_sub_broadcast_2d_dim_1": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_max_sub_broadcast_4d_dim_0": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_max_sub_broadcast_4d_dim_1": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_max_sub_broadcast_4d_dim_2": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_max_sub_broadcast_4d_dim_3": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_mm_mm_55x2_2x99": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_mm_mm_67x255_255x128": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_mm_mm_67x256_256x128": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_mm_mm_67x67_67x67": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_pad_2d_both_dims": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_pad_2d_dim0_left": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_pad_2d_dim0_left_only": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_pad_2d_last_dim_left_and_right_stick_aligned": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pad_2d_last_dim_left_stick_aligned": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pad_2d_last_dim_left_two_sticks": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pad_2d_last_dim_right": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_pad_3d_dim0_left": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_pad_3d_dim1_left": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_pad_3d_dim1_right": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_pad_3d_last_dim_right": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_pad_4d_dim0_left": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_permute_2d_1_0": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_permute_3d_0_2_1": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_permute_4d_0_2_1_3": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_permute_4d_0_3_1_2": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_permute_4d_0_m2_m1_1": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_permute_5d_0_2_3_4_1": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_pointwise_binary_op_add_256_256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_binary_op_add_67x256_67x256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_binary_op_add_67x71x256_67x71x256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_binary_op_add_7x12x32x64_7x12x32x64": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_binary_op_div_256_256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_binary_op_div_67x256_67x256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_binary_op_div_67x71x256_67x71x256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_binary_op_div_7x12x32x64_7x12x32x64": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_binary_op_fp32_add_fp32": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_binary_op_fp32_div_fp32": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_binary_op_fp32_mul_fp32": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_binary_op_fp32_sub_fp32": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_binary_op_mul_256_256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_binary_op_mul_67x256_67x256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_binary_op_mul_67x71x256_67x71x256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_binary_op_mul_7x12x32x64_7x12x32x64": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_binary_op_sub_256_256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_binary_op_sub_67x256_67x256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_binary_op_sub_67x71x256_67x71x256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_binary_op_sub_7x12x32x64_7x12x32x64": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_unary_op_abs_67x71x256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_unary_op_exp_67x71x256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_unary_op_neg_67x71x256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_unary_op_reciprocal_67x71x256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_unary_op_relu_67x71x256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_pointwise_unary_op_tanh_67x71x256": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_rmsnorm_2d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_rmsnorm_3d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_rmsnorm_4d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_scalar_cpu_add_1d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_scalar_cpu_add_2d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_scalar_cpu_add_3d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_scalar_cpu_add_4d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_scalar_cpu_combined_1d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_scalar_cpu_combined_2d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_scalar_cpu_combined_3d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_scalar_cpu_combined_4d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_scalar_cpu_div_1d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_scalar_cpu_div_2d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_scalar_cpu_div_3d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_scalar_cpu_div_4d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_scalar_cpu_mul_1d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_scalar_cpu_mul_2d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_scalar_cpu_mul_3d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_scalar_cpu_mul_4d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_scalar_cpu_sub_1d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_scalar_cpu_sub_2d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_scalar_cpu_sub_3d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_scalar_cpu_sub_4d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_scalar_cpu_true_divide_1d": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_scalar_cpu_true_divide_2d": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_scalar_cpu_true_divide_3d": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_scalar_cpu_true_divide_4d": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_sdpa_mha_prefill_causal": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_sdpa_mha_prefill": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_sdpa_mha_prefill_mask": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_softmax_softmax_2d_dim0": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_softmax_softmax_2d_dim1": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_softmax_softmax_3d_dim0": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_softmax_softmax_3d_dim1": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_softmax_softmax_3d_dim2": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_softplus_3d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_softplus_4d": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_squeeze_reduction_sum_3d0": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_squeeze_reduction_sum_3d1": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_squeeze_reduction_sum_4d0": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_squeeze_reduction_sum_4d1": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_squeeze_reduction_sum_4d2": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_squeeze_single_2d1": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_squeeze_single_3d0": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_squeeze_single_3d1": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_squeeze_single_3d2": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_squeeze_single_4d0": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_squeeze_single_4d1": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_squeeze_single_4d2": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_squeeze_single_4d3": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_sum_keepdim0_sum_2d_dim_0": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_sum_keepdim0_sum_3d_dim_1": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_sum_keepdim0_sum_3d_dim_2": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_sum_keepdim1_sum_2d_dim_0": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_sum_keepdim1_sum_3d_dim_1": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_sum_keepdim1_sum_3d_dim_2": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_t_2d_1088x320": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_t_2d_320x320": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_t_2d_contiguous_4096x49280": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_t_2d_contiguous_49280x4096": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_transpose_2d_contiguous_dim_0_1": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_transpose_2d_contiguous_dim_0_2": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_transpose_2d_contiguous_dim_0_2_same_dim": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_transpose_2d_contiguous_dim_1_2": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_transpose_2d_dim_0_1": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_transpose_2d_dim_0_2": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_transpose_2d_dim_0_2_same_dim": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_transpose_2d_dim_1_2": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_transpose_3d_contiguous_dim_0_1": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_transpose_3d_contiguous_dim_0_2": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_transpose_3d_contiguous_dim_0_2_same_dim": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_transpose_3d_contiguous_dim_1_2": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_transpose_3d_dim_0_1": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_transpose_3d_dim_0_2": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_transpose_3d_dim_0_2_same_dim": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_transpose_3d_dim_1_2": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_transpose_4d_contiguous_dim_0_1": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_transpose_4d_contiguous_dim_0_3": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_transpose_4d_contiguous_dim_1_2": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_transpose_4d_contiguous_dim_1_3": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_transpose_4d_contiguous_dim_2_3": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_transpose_4d_dim_0_1": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_transpose_4d_dim_0_3": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_transpose_4d_dim_1_2": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_transpose_4d_dim_1_3": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_transpose_4d_dim_2_3": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_unsqueeze_broadcast_add_1d0": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_unsqueeze_broadcast_add_2d0": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_unsqueeze_broadcast_add_2d1": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_unsqueeze_broadcast_add_3d0": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_unsqueeze_broadcast_add_3d1": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_unsqueeze_broadcast_add_3d2": TestFailure(
-        ("lx_planning_pointwise"), is_skip=True
-    ),
-    "test_unsqueeze_single_1d0": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_unsqueeze_single_2d0": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_unsqueeze_single_2d1": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_unsqueeze_single_3d0": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_unsqueeze_single_3d1": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_unsqueeze_single_3d2": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_unsqueeze_single_4d0": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_unsqueeze_single_4d1": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_unsqueeze_single_4d2": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_unsqueeze_single_4d3": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_where_eq_1d256": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_where_ge_1d256": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_where_gt_1d256": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_where_le_1d256": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_where_lt_1d256": TestFailure(("lx_planning_pointwise"), is_skip=True),
-    "test_where_ne_1d256": TestFailure(("lx_planning_pointwise"), is_skip=True),
-}
+POINTWISE_TEST_FAILURES = [
+    "test_add_broadcast_cpu_256_67x256",
+    "test_addmm_1152_10x1152_1152x1152",
+    "test_addmm_out_basic",
+    "test_addmm_scaled_alpha_0_5",
+    "test_alias_operands_cpu_pow_67x71x256",
+    "test_alias_operands_cube_256",
+    "test_alias_operands_cube_67x256",
+    "test_alias_operands_cube_67x71x256",
+    "test_alias_operands_double_67x71x256",
+    "test_alias_operands_square_67x71x256",
+    "test_alias_operands_triple_256",
+    "test_alias_operands_triple_67x256",
+    "test_alias_operands_triple_67x71x256",
+    "test_attention_3d_batch_size_1",
+    "test_attention_3d",
+    "test_attention_4d",
+    "test_bmm_bmm_2x256x1_2x1x128",
+    "test_bmm_bmm_2x55x2_2x2x99",
+    "test_bmm_bmm_2x99x65_2x65x55",
+    "test_bmm_bmm_3x17x256_3x256x128",
+    "test_bmm_bmm_3x1x256_3x256x128",
+    "test_cat_1d_dim0",
+    "test_cat_1d_dim0_three_tensors",
+    "test_cat_2d_dim0_diff_size",
+    "test_cat_2d_dim0_three_tensors",
+    "test_cat_2d_dim1_diff_size",
+    "test_cat_3d_dim0",
+    "test_cat_3d_dim1",
+    "test_cat_3d_dim1_size1",
+    "test_cat_3d_dim2",
+    "test_cat_4d_dim0",
+    "test_cat_4d_dim1",
+    "test_cat_4d_dim2",
+    "test_cat_4d_dim3_fp32",
+    "test_cat_4d_dim3",
+    "test_clone_bool_1d",
+    "test_clone_bool_2d",
+    "test_clone_bool_3d",
+    "test_cmp_eq_1d",
+    "test_cmp_eq_2d",
+    "test_cmp_eq_3d",
+    "test_cmp_eq_broadcast",
+    "test_cmp_ge_1d",
+    "test_cmp_ge_2d",
+    "test_cmp_ge_3d",
+    "test_cmp_ge_broadcast",
+    "test_cmp_gt_1d",
+    "test_cmp_gt_2d",
+    "test_cmp_gt_3d",
+    "test_cmp_gt_broadcast",
+    "test_cmp_le_1d",
+    "test_cmp_le_2d",
+    "test_cmp_le_3d",
+    "test_cmp_le_broadcast",
+    "test_cmp_lt_1d",
+    "test_cmp_lt_2d",
+    "test_cmp_lt_3d",
+    "test_cmp_lt_broadcast",
+    "test_cmp_ne_1d",
+    "test_cmp_ne_2d",
+    "test_cmp_ne_3d",
+    "test_cmp_ne_broadcast",
+    "test_fallback_1d",
+    "test_fallback_2d",
+    "test_fallback_3d",
+    "test_full_value_1",
+    "test_full_value_2",
+    "test_inplace_copy_copy_bool",
+    "test_inplace_op_add_1d",
+    "test_inplace_op_add_2d",
+    "test_inplace_op_add_3d",
+    "test_inplace_op_mul_1d",
+    "test_inplace_op_mul_2d",
+    "test_inplace_op_mul_3d",
+    "test_isin_out_tensor_tensor",
+    "test_isin_tensor_tensor",
+    "test_item_from_computation",
+    "test_layernorm_2d",
+    "test_linear_2d_bias",
+    "test_linear_2d_no_bias",
+    "test_linear_3d_bias",
+    "test_linear_3d_no_bias",
+    "test_logical_not_logical_not_1d_bool",
+    "test_logical_not_logical_not_1d_fp16",
+    "test_logical_not_logical_not_2d_bool",
+    "test_logical_not_logical_not_2d_fp16",
+    "test_logical_not_logical_not_3d_bool",
+    "test_logical_not_logical_not_3d_fp16",
+    "test_logical_not_logical_not_4d_bool",
+    "test_logical_not_logical_not_4d_fp16",
+    "test_logical_not_logical_not_bool_single_elem",
+    "test_logical_not_logical_not_fp16_single_elem",
+    "test_matmul_matmul_2x3x55x2_2x3x2x99",
+    "test_matmul_matmul_2x3x99x1_2x3x1x55",
+    "test_matmul_matmul_2x3x99x65_2x3x65x55",
+    "test_matmul_matmul_2x55x2_2x2x99",
+    "test_matmul_matmul_2x64x128_128x16384",
+    "test_matmul_matmul_2x99x1_1x55",
+    "test_matmul_matmul_2x99x1_2x1x55",
+    "test_matmul_matmul_2x99x65_2x65x55",
+    "test_matmul_matmul_3x17x256_3x256x128",
+    "test_matmul_matmul_3x18x128x256_3x18x256x128",
+    "test_matmul_matmul_3x1x256_3x256x128",
+    "test_matmul_matmul_512x256_256x128",
+    "test_matmul_matmul_55x2_2x99",
+    "test_matmul_matmul_99x1_1x55",
+    "test_matmul_matmul_99x65_65x55",
+    "test_max_keepdim0_sum_2d_dim_0",
+    "test_max_keepdim0_sum_2d_dim_1",
+    "test_max_keepdim0_sum_3d_dim_1",
+    "test_max_keepdim0_sum_3d_dim_2",
+    "test_max_keepdim0_sum_4d_dim_0",
+    "test_max_keepdim0_sum_4d_dim_1",
+    "test_max_keepdim0_sum_4d_dim_2",
+    "test_max_keepdim0_sum_4d_dim_3",
+    "test_max_keepdim1_sum_2d_dim_0",
+    "test_max_keepdim1_sum_2d_dim_1",
+    "test_max_keepdim1_sum_3d_dim_0",
+    "test_max_keepdim1_sum_3d_dim_1",
+    "test_max_keepdim1_sum_3d_dim_2",
+    "test_max_keepdim1_sum_4d_dim_0",
+    "test_max_keepdim1_sum_4d_dim_1",
+    "test_max_keepdim1_sum_4d_dim_2",
+    "test_max_keepdim1_sum_4d_dim_3",
+    "test_max_sub_broadcast_2d_dim_0",
+    "test_max_sub_broadcast_2d_dim_1",
+    "test_max_sub_broadcast_4d_dim_0",
+    "test_max_sub_broadcast_4d_dim_1",
+    "test_max_sub_broadcast_4d_dim_2",
+    "test_max_sub_broadcast_4d_dim_3",
+    "test_mm_mm_55x2_2x99",
+    "test_mm_mm_67x255_255x128",
+    "test_mm_mm_67x256_256x128",
+    "test_mm_mm_67x67_67x67",
+    "test_pad_2d_both_dims",
+    "test_pad_2d_dim0_left",
+    "test_pad_2d_dim0_left_only",
+    "test_pad_2d_last_dim_left_and_right_stick_aligned",
+    "test_pad_2d_last_dim_left_stick_aligned",
+    "test_pad_2d_last_dim_left_two_sticks",
+    "test_pad_2d_last_dim_right",
+    "test_pad_3d_dim0_left",
+    "test_pad_3d_dim1_left",
+    "test_pad_3d_dim1_right",
+    "test_pad_3d_last_dim_right",
+    "test_pad_4d_dim0_left",
+    "test_permute_2d_1_0",
+    "test_permute_3d_0_2_1",
+    "test_permute_4d_0_2_1_3",
+    "test_permute_4d_0_3_1_2",
+    "test_permute_4d_0_m2_m1_1",
+    "test_permute_5d_0_2_3_4_1",
+    "test_pointwise_binary_op_add_256_256",
+    "test_pointwise_binary_op_add_67x256_67x256",
+    "test_pointwise_binary_op_add_67x71x256_67x71x256",
+    "test_pointwise_binary_op_add_7x12x32x64_7x12x32x64",
+    "test_pointwise_binary_op_div_256_256",
+    "test_pointwise_binary_op_div_67x256_67x256",
+    "test_pointwise_binary_op_div_67x71x256_67x71x256",
+    "test_pointwise_binary_op_div_7x12x32x64_7x12x32x64",
+    "test_pointwise_binary_op_fp32_add_fp32",
+    "test_pointwise_binary_op_fp32_div_fp32",
+    "test_pointwise_binary_op_fp32_mul_fp32",
+    "test_pointwise_binary_op_fp32_sub_fp32",
+    "test_pointwise_binary_op_mul_256_256",
+    "test_pointwise_binary_op_mul_67x256_67x256",
+    "test_pointwise_binary_op_mul_67x71x256_67x71x256",
+    "test_pointwise_binary_op_mul_7x12x32x64_7x12x32x64",
+    "test_pointwise_binary_op_sub_256_256",
+    "test_pointwise_binary_op_sub_67x256_67x256",
+    "test_pointwise_binary_op_sub_67x71x256_67x71x256",
+    "test_pointwise_binary_op_sub_7x12x32x64_7x12x32x64",
+    "test_pointwise_unary_op_abs_67x71x256",
+    "test_pointwise_unary_op_exp_67x71x256",
+    "test_pointwise_unary_op_neg_67x71x256",
+    "test_pointwise_unary_op_reciprocal_67x71x256",
+    "test_pointwise_unary_op_relu_67x71x256",
+    "test_pointwise_unary_op_tanh_67x71x256",
+    "test_rmsnorm_2d",
+    "test_rmsnorm_3d",
+    "test_rmsnorm_4d",
+    "test_scalar_cpu_add_1d",
+    "test_scalar_cpu_add_2d",
+    "test_scalar_cpu_add_3d",
+    "test_scalar_cpu_add_4d",
+    "test_scalar_cpu_combined_1d",
+    "test_scalar_cpu_combined_2d",
+    "test_scalar_cpu_combined_3d",
+    "test_scalar_cpu_combined_4d",
+    "test_scalar_cpu_div_1d",
+    "test_scalar_cpu_div_2d",
+    "test_scalar_cpu_div_3d",
+    "test_scalar_cpu_div_4d",
+    "test_scalar_cpu_mul_1d",
+    "test_scalar_cpu_mul_2d",
+    "test_scalar_cpu_mul_3d",
+    "test_scalar_cpu_mul_4d",
+    "test_scalar_cpu_sub_1d",
+    "test_scalar_cpu_sub_2d",
+    "test_scalar_cpu_sub_3d",
+    "test_scalar_cpu_sub_4d",
+    "test_scalar_cpu_true_divide_1d",
+    "test_scalar_cpu_true_divide_2d",
+    "test_scalar_cpu_true_divide_3d",
+    "test_scalar_cpu_true_divide_4d",
+    "test_sdpa_mha_prefill_causal",
+    "test_sdpa_mha_prefill",
+    "test_sdpa_mha_prefill_mask",
+    "test_softmax_softmax_2d_dim0",
+    "test_softmax_softmax_2d_dim1",
+    "test_softmax_softmax_3d_dim0",
+    "test_softmax_softmax_3d_dim1",
+    "test_softmax_softmax_3d_dim2",
+    "test_softplus_3d",
+    "test_softplus_4d",
+    "test_squeeze_reduction_sum_3d0",
+    "test_squeeze_reduction_sum_3d1",
+    "test_squeeze_reduction_sum_4d0",
+    "test_squeeze_reduction_sum_4d1",
+    "test_squeeze_reduction_sum_4d2",
+    "test_squeeze_single_2d1",
+    "test_squeeze_single_3d0",
+    "test_squeeze_single_3d1",
+    "test_squeeze_single_3d2",
+    "test_squeeze_single_4d0",
+    "test_squeeze_single_4d1",
+    "test_squeeze_single_4d2",
+    "test_squeeze_single_4d3",
+    "test_sum_keepdim0_sum_2d_dim_0",
+    "test_sum_keepdim0_sum_3d_dim_1",
+    "test_sum_keepdim0_sum_3d_dim_2",
+    "test_sum_keepdim1_sum_2d_dim_0",
+    "test_sum_keepdim1_sum_3d_dim_1",
+    "test_sum_keepdim1_sum_3d_dim_2",
+    "test_t_2d_1088x320",
+    "test_t_2d_320x320",
+    "test_t_2d_contiguous_4096x49280",
+    "test_t_2d_contiguous_49280x4096",
+    "test_transpose_2d_contiguous_dim_0_1",
+    "test_transpose_2d_contiguous_dim_0_2",
+    "test_transpose_2d_contiguous_dim_0_2_same_dim",
+    "test_transpose_2d_contiguous_dim_1_2",
+    "test_transpose_2d_dim_0_1",
+    "test_transpose_2d_dim_0_2",
+    "test_transpose_2d_dim_0_2_same_dim",
+    "test_transpose_2d_dim_1_2",
+    "test_transpose_3d_contiguous_dim_0_1",
+    "test_transpose_3d_contiguous_dim_0_2",
+    "test_transpose_3d_contiguous_dim_0_2_same_dim",
+    "test_transpose_3d_contiguous_dim_1_2",
+    "test_transpose_3d_dim_0_1",
+    "test_transpose_3d_dim_0_2",
+    "test_transpose_3d_dim_0_2_same_dim",
+    "test_transpose_3d_dim_1_2",
+    "test_transpose_4d_contiguous_dim_0_1",
+    "test_transpose_4d_contiguous_dim_0_3",
+    "test_transpose_4d_contiguous_dim_1_2",
+    "test_transpose_4d_contiguous_dim_1_3",
+    "test_transpose_4d_contiguous_dim_2_3",
+    "test_transpose_4d_dim_0_1",
+    "test_transpose_4d_dim_0_3",
+    "test_transpose_4d_dim_1_2",
+    "test_transpose_4d_dim_1_3",
+    "test_transpose_4d_dim_2_3",
+    "test_unsqueeze_broadcast_add_1d0",
+    "test_unsqueeze_broadcast_add_2d0",
+    "test_unsqueeze_broadcast_add_2d1",
+    "test_unsqueeze_broadcast_add_3d0",
+    "test_unsqueeze_broadcast_add_3d1",
+    "test_unsqueeze_broadcast_add_3d2",
+    "test_unsqueeze_single_1d0",
+    "test_unsqueeze_single_2d0",
+    "test_unsqueeze_single_2d1",
+    "test_unsqueeze_single_3d0",
+    "test_unsqueeze_single_3d1",
+    "test_unsqueeze_single_3d2",
+    "test_unsqueeze_single_4d0",
+    "test_unsqueeze_single_4d1",
+    "test_unsqueeze_single_4d2",
+    "test_unsqueeze_single_4d3",
+    "test_where_eq_1d256",
+    "test_where_ge_1d256",
+    "test_where_gt_1d256",
+    "test_where_le_1d256",
+    "test_where_lt_1d256",
+    "test_where_ne_1d256",
+]
 
 
 class LxPlanningTwoOpPointwiseAdditionTest(unittest.TestCase):
@@ -662,1276 +364,254 @@ copy_tests(
 )
 
 
-POINTWISE_SUBTRACTION_TEST_FAILURES = {
-    "test_add_broadcast_cpu_256_67x256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_addmm_1152_10x1152_1152x1152": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_addmm_out_basic": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_addmm_scaled_alpha_0_5": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_alias_operands_cpu_pow_67x71x256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_alias_operands_cube_256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_alias_operands_cube_67x256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_alias_operands_cube_67x71x256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_alias_operands_double_67x71x256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_alias_operands_square_67x71x256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_alias_operands_triple_256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_alias_operands_triple_67x256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_alias_operands_triple_67x71x256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_attention_3d_batch_size_1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_attention_3d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_attention_4d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_bmm_bmm_2x256x1_2x1x128": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_bmm_bmm_2x55x2_2x2x99": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_bmm_bmm_2x99x65_2x65x55": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_bmm_bmm_3x17x256_3x256x128": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_bmm_bmm_3x1x256_3x256x128": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_cat_1d_dim0": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_cat_1d_dim0_three_tensors": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_cat_2d_dim0_diff_size": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_cat_2d_dim0_three_tensors": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_cat_2d_dim1_diff_size": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_cat_3d_dim0": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_cat_3d_dim1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_cat_3d_dim1_size1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_cat_3d_dim2": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_cat_4d_dim0": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_cat_4d_dim1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_cat_4d_dim2": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_cat_4d_dim3_fp32": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_cat_4d_dim3": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_clone_bool_1d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_clone_bool_2d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_clone_bool_3d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_cmp_eq_1d": TestFailure(("lx_planning_pointwise_subtraction"), is_skip=True),
-    "test_cmp_eq_2d": TestFailure(("lx_planning_pointwise_subtraction"), is_skip=True),
-    "test_cmp_eq_3d": TestFailure(("lx_planning_pointwise_subtraction"), is_skip=True),
-    "test_cmp_eq_broadcast": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_cmp_ge_1d": TestFailure(("lx_planning_pointwise_subtraction"), is_skip=True),
-    "test_cmp_ge_2d": TestFailure(("lx_planning_pointwise_subtraction"), is_skip=True),
-    "test_cmp_ge_3d": TestFailure(("lx_planning_pointwise_subtraction"), is_skip=True),
-    "test_cmp_ge_broadcast": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_cmp_gt_1d": TestFailure(("lx_planning_pointwise_subtraction"), is_skip=True),
-    "test_cmp_gt_2d": TestFailure(("lx_planning_pointwise_subtraction"), is_skip=True),
-    "test_cmp_gt_3d": TestFailure(("lx_planning_pointwise_subtraction"), is_skip=True),
-    "test_cmp_gt_broadcast": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_cmp_le_1d": TestFailure(("lx_planning_pointwise_subtraction"), is_skip=True),
-    "test_cmp_le_2d": TestFailure(("lx_planning_pointwise_subtraction"), is_skip=True),
-    "test_cmp_le_3d": TestFailure(("lx_planning_pointwise_subtraction"), is_skip=True),
-    "test_cmp_le_broadcast": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_cmp_lt_1d": TestFailure(("lx_planning_pointwise_subtraction"), is_skip=True),
-    "test_cmp_lt_2d": TestFailure(("lx_planning_pointwise_subtraction"), is_skip=True),
-    "test_cmp_lt_3d": TestFailure(("lx_planning_pointwise_subtraction"), is_skip=True),
-    "test_cmp_lt_broadcast": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_cmp_ne_1d": TestFailure(("lx_planning_pointwise_subtraction"), is_skip=True),
-    "test_cmp_ne_2d": TestFailure(("lx_planning_pointwise_subtraction"), is_skip=True),
-    "test_cmp_ne_3d": TestFailure(("lx_planning_pointwise_subtraction"), is_skip=True),
-    "test_cmp_ne_broadcast": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_fallback_1d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_fallback_2d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_fallback_3d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_inplace_copy_copy_bool": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_inplace_op_add_1d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_inplace_op_add_2d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_inplace_op_add_3d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_inplace_op_mul_1d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_inplace_op_mul_2d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_inplace_op_mul_3d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_isin_out_tensor_tensor": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_isin_tensor_tensor": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_item_from_computation": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_layernorm_2d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_linear_2d_bias": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_linear_2d_no_bias": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_linear_3d_bias": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_linear_3d_no_bias": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_logical_not_logical_not_1d_bool": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_logical_not_logical_not_1d_fp16": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_logical_not_logical_not_2d_bool": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_logical_not_logical_not_2d_fp16": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_logical_not_logical_not_3d_bool": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_logical_not_logical_not_3d_fp16": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_logical_not_logical_not_4d_bool": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_logical_not_logical_not_4d_fp16": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_logical_not_logical_not_bool_single_elem": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_logical_not_logical_not_fp16_single_elem": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_matmul_matmul_2x3x55x2_2x3x2x99": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_matmul_matmul_2x3x99x1_2x3x1x55": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_matmul_matmul_2x3x99x65_2x3x65x55": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_matmul_matmul_2x55x2_2x2x99": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_matmul_matmul_2x64x128_128x16384": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_matmul_matmul_2x99x1_1x55": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_matmul_matmul_2x99x1_2x1x55": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_matmul_matmul_2x99x65_2x65x55": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_matmul_matmul_3x17x256_3x256x128": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_matmul_matmul_3x18x128x256_3x18x256x128": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_matmul_matmul_3x1x256_3x256x128": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_matmul_matmul_512x256_256x128": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_matmul_matmul_55x2_2x99": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_matmul_matmul_99x1_1x55": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_matmul_matmul_99x65_65x55": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_2d_dim_0": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_2d_dim_1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_3d_dim_1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_3d_dim_2": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_4d_dim_0": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_4d_dim_1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_4d_dim_2": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_4d_dim_3": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_2d_dim_0": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_2d_dim_1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_3d_dim_0": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_3d_dim_1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_3d_dim_2": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_4d_dim_0": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_4d_dim_1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_4d_dim_2": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_4d_dim_3": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_max_sub_broadcast_2d_dim_0": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_max_sub_broadcast_2d_dim_1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_max_sub_broadcast_4d_dim_0": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_max_sub_broadcast_4d_dim_1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_max_sub_broadcast_4d_dim_2": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_max_sub_broadcast_4d_dim_3": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_mm_mm_55x2_2x99": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_mm_mm_67x255_255x128": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_mm_mm_67x256_256x128": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_mm_mm_67x67_67x67": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pad_2d_both_dims": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pad_2d_dim0_left": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pad_2d_dim0_left_only": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pad_2d_last_dim_left_and_right_stick_aligned": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pad_2d_last_dim_left_stick_aligned": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pad_2d_last_dim_left_two_sticks": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pad_2d_last_dim_right": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pad_3d_dim0_left": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pad_3d_dim1_left": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pad_3d_dim1_right": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pad_3d_last_dim_right": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pad_4d_dim0_left": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_permute_4d_0_2_1_3": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_permute_4d_0_3_1_2": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_softmax_softmax_2d_dim0": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_softmax_softmax_2d_dim1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_softmax_softmax_3d_dim0": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_softmax_softmax_3d_dim1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_softmax_softmax_3d_dim2": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_softplus_3d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_softplus_4d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_squeeze_single_2d1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_squeeze_single_3d0": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_squeeze_single_3d1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_squeeze_single_3d2": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_squeeze_single_4d0": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_squeeze_single_4d1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_squeeze_single_4d2": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_squeeze_single_4d3": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_squeeze_reduction_sum_4d1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_where_eq_1d256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_where_ge_1d256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_where_gt_1d256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_where_le_1d256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_where_lt_1d256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_where_ne_1d256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_zeros_aligned": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_add_1d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_add_2d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_add_3d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_add_4d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_combined_1d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_combined_2d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_combined_3d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_combined_4d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_div_1d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_div_2d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_div_3d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_div_4d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_mul_1d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_mul_2d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_mul_3d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_mul_4d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_sub_1d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_sub_2d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_sub_3d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_sub_4d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_true_divide_1d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_true_divide_2d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_true_divide_3d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_scalar_cpu_true_divide_4d": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_sdpa_mha_prefill_causal": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_sdpa_mha_prefill": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_sdpa_mha_prefill_mask": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_sum_keepdim0_sum_3d_dim_1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_sum_keepdim0_sum_3d_dim_2": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_sum_keepdim1_sum_3d_dim_1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_sum_keepdim1_sum_3d_dim_2": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_t_2d_contiguous_4096x49280": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_t_2d_contiguous_49280x4096": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_transpose_2d_contiguous_dim_0_1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_transpose_2d_contiguous_dim_0_2": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_transpose_2d_contiguous_dim_0_2_same_dim": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_transpose_2d_contiguous_dim_1_2": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_transpose_3d_contiguous_dim_0_1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_transpose_3d_contiguous_dim_0_2": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_transpose_3d_contiguous_dim_0_2_same_dim": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_transpose_3d_contiguous_dim_1_2": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_transpose_4d_contiguous_dim_0_1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_transpose_4d_contiguous_dim_0_3": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_transpose_4d_contiguous_dim_1_2": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_transpose_4d_contiguous_dim_1_3": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_transpose_4d_contiguous_dim_2_3": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_unsqueeze_single_4d2": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_unsqueeze_broadcast_add_1d0": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_unsqueeze_broadcast_add_2d0": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_unsqueeze_broadcast_add_2d1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_unsqueeze_broadcast_add_3d0": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_unsqueeze_broadcast_add_3d1": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_unsqueeze_broadcast_add_3d2": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_add_256_256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_add_67x256_67x256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_add_67x71x256_67x71x256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_add_7x12x32x64_7x12x32x64": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_div_256_256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_div_67x256_67x256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_div_67x71x256_67x71x256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_div_7x12x32x64_7x12x32x64": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_fp32_add_fp32": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_fp32_div_fp32": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_fp32_mul_fp32": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_fp32_sub_fp32": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_mul_256_256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_mul_67x256_67x256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_mul_67x71x256_67x71x256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_mul_7x12x32x64_7x12x32x64": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_sub_256_256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_sub_67x256_67x256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_sub_67x71x256_67x71x256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_sub_7x12x32x64_7x12x32x64": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_unary_op_abs_67x71x256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_unary_op_exp_67x71x256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_unary_op_neg_67x71x256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_unary_op_reciprocal_67x71x256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_unary_op_relu_67x71x256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_pointwise_unary_op_tanh_67x71x256": TestFailure(
-        ("lx_planning_pointwise_subtraction"), is_skip=True
-    ),
-    "test_rmsnorm_2d": TestFailure(("lx_planning_pointwise_subtraction"), is_skip=True),
-    "test_rmsnorm_3d": TestFailure(("lx_planning_pointwise_subtraction"), is_skip=True),
-    "test_rmsnorm_4d": TestFailure(("lx_planning_pointwise_subtraction"), is_skip=True),
-}
-
-
-class LxPlanningTwoOpPointwiseSubtractionTest(unittest.TestCase):
-    def wrap_pointwise(self, fn):
-        @functools.wraps(fn)
-        def make_seq_of_ops(*fn_args, **fn_kwargs):
-            result = fn(*fn_args, **fn_kwargs)
-            return pytree.tree_map(
-                lambda x: x - x if isinstance(x, torch.Tensor) else x, result
-            )
-
-        return make_seq_of_ops
-
-    def compare_with_cpu(self, fn, *args, **kwargs):
-        kwargs["cpu_compile"] = False
-        return compare_with_cpu(self.wrap_pointwise(fn), *args, **kwargs)
-
-    def compare(
-        self,
-        fn,
-        *args,
-        atol=0.0,
-        rtol=0.0,
-        cpu_atol=0.1,
-        cpu_rtol=0.1,
-        needs_device=False,
-    ):
-        return compare_with_cpu(
-            self.wrap_pointwise(fn),
-            *args,
-            atol=cpu_atol,
-            rtol=cpu_rtol,
-            needs_device=needs_device,
-            cpu_compile=False,
-        )
-
-
-copy_tests(
-    make_lx_planning_class(inductor.test_inductor_ops.TestOps),
-    LxPlanningTwoOpPointwiseSubtractionTest,
-    "lx_planning_pointwise_subtraction",
-    POINTWISE_SUBTRACTION_TEST_FAILURES if not tests_lx_planning_run_skips else None,
-)
-
-
 REDUCTION_TEST_FAILURES = {
-    "test_add_broadcast_cpu_256_67x256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_addmm_1152_10x1152_1152x1152": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_addmm_out_basic": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_addmm_scaled_alpha_0_5": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_alias_operands_cpu_pow_67x71x256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_alias_operands_cube_256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_alias_operands_cube_67x256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_alias_operands_cube_67x71x256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_alias_operands_double_67x71x256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_alias_operands_square_67x71x256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_alias_operands_triple_256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_alias_operands_triple_67x256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_alias_operands_triple_67x71x256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_attention_3d_batch_size_1": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_attention_3d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_attention_4d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_bmm_bmm_2x256x1_2x1x128": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_bmm_bmm_2x55x2_2x2x99": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_bmm_bmm_2x99x65_2x65x55": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_bmm_bmm_3x17x256_3x256x128": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_bmm_bmm_3x1x256_3x256x128": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_cat_1d_dim0": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cat_1d_dim0_three_tensors": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_cat_2d_dim0_diff_size": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cat_2d_dim0_three_tensors": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_cat_2d_dim1_diff_size": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cat_3d_dim0": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cat_3d_dim1": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cat_3d_dim1_size1": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cat_3d_dim2": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cat_4d_dim0": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cat_4d_dim1": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cat_4d_dim2": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cat_4d_dim3_fp32": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cat_4d_dim3": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_eq_1d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_eq_2d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_eq_3d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_eq_broadcast": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_ge_1d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_ge_2d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_ge_3d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_ge_broadcast": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_gt_1d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_gt_2d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_gt_3d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_gt_broadcast": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_le_1d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_le_2d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_le_3d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_le_broadcast": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_lt_1d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_lt_2d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_lt_3d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_lt_broadcast": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_ne_1d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_ne_2d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_ne_3d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_cmp_ne_broadcast": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_copy_roundtrip_4d_stick": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_fallback_1d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_fallback_2d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_fallback_3d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_full_value_1": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_full_value_2": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_inplace_op_add_1d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_inplace_op_add_2d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_inplace_op_add_3d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_inplace_op_mul_1d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_inplace_op_mul_2d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_inplace_op_mul_3d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_item_from_computation": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_layernorm_2d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_linear_2d_bias": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_linear_2d_no_bias": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_linear_3d_bias": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_linear_3d_no_bias": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_logical_not_logical_not_1d_fp16": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_logical_not_logical_not_2d_fp16": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_logical_not_logical_not_3d_fp16": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_logical_not_logical_not_4d_fp16": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_logical_not_logical_not_fp16_single_elem": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_matmul_matmul_2x3x55x2_2x3x2x99": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_matmul_matmul_2x3x99x1_2x3x1x55": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_matmul_matmul_2x3x99x65_2x3x65x55": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_matmul_matmul_2x55x2_2x2x99": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_matmul_matmul_2x64x128_128x16384": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_matmul_matmul_2x99x1_1x55": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_matmul_matmul_2x99x1_2x1x55": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_matmul_matmul_2x99x65_2x65x55": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_matmul_matmul_3x17x256_3x256x128": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_matmul_matmul_3x18x128x256_3x18x256x128": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_matmul_matmul_3x1x256_3x256x128": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_matmul_matmul_512x256_256x128": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_matmul_matmul_55x2_2x99": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_matmul_matmul_99x1_1x55": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_matmul_matmul_99x65_65x55": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_2d_dim_0": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_2d_dim_1": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_3d_dim_1": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_3d_dim_2": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_4d_dim_0": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_4d_dim_1": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_4d_dim_2": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_max_keepdim0_sum_4d_dim_3": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_2d_dim_0": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_2d_dim_1": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_3d_dim_0": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_3d_dim_1": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_3d_dim_2": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_4d_dim_0": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_4d_dim_1": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_4d_dim_2": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_max_keepdim1_sum_4d_dim_3": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_max_sub_broadcast_2d_dim_0": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_max_sub_broadcast_2d_dim_1": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_max_sub_broadcast_4d_dim_0": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_max_sub_broadcast_4d_dim_1": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_max_sub_broadcast_4d_dim_2": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_max_sub_broadcast_4d_dim_3": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_mm_mm_55x2_2x99": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_mm_mm_67x255_255x128": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_mm_mm_67x256_256x128": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_mm_mm_67x67_67x67": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_pad_2d_both_dims": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_pad_2d_dim0_left": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_pad_2d_dim0_left_only": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_pad_2d_last_dim_left_and_right_stick_aligned": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pad_2d_last_dim_left_stick_aligned": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pad_2d_last_dim_left_two_sticks": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pad_2d_last_dim_right": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_pad_3d_dim0_left": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_pad_3d_dim1_left": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_pad_3d_dim1_right": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_pad_3d_last_dim_right": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_pad_4d_dim0_left": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_permute_3d_0_2_1": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_permute_4d_0_3_1_2": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_permute_4d_0_m2_m1_1": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_permute_5d_0_2_3_4_1": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_pointwise_binary_op_add_256_256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_add_67x256_67x256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_add_67x71x256_67x71x256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_add_7x12x32x64_7x12x32x64": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_div_256_256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_div_67x256_67x256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_div_67x71x256_67x71x256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_div_7x12x32x64_7x12x32x64": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_fp32_add_fp32": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_fp32_div_fp32": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_fp32_mul_fp32": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_fp32_sub_fp32": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_mul_256_256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_mul_67x256_67x256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_mul_67x71x256_67x71x256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_mul_7x12x32x64_7x12x32x64": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_sub_256_256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_sub_67x256_67x256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_sub_67x71x256_67x71x256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_binary_op_sub_7x12x32x64_7x12x32x64": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_range_op_clamp_fp16": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_unary_op_abs_67x71x256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_unary_op_exp_67x71x256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_unary_op_neg_67x71x256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_unary_op_reciprocal_67x256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_unary_op_reciprocal_67x71x256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_unary_op_relu_67x71x256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_pointwise_unary_op_tanh_67x71x256": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_rmsnorm_2d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_rmsnorm_3d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_rmsnorm_4d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_scalar_cpu_add_1d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_scalar_cpu_add_2d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_scalar_cpu_add_3d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_scalar_cpu_add_4d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_scalar_cpu_combined_1d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_scalar_cpu_combined_2d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_scalar_cpu_combined_3d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_scalar_cpu_combined_4d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_scalar_cpu_div_1d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_scalar_cpu_div_2d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_scalar_cpu_div_3d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_scalar_cpu_div_4d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_scalar_cpu_mul_1d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_scalar_cpu_mul_2d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_scalar_cpu_mul_3d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_scalar_cpu_mul_4d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_scalar_cpu_sub_1d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_scalar_cpu_sub_2d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_scalar_cpu_sub_3d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_scalar_cpu_sub_4d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_scalar_cpu_true_divide_1d": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_scalar_cpu_true_divide_2d": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_scalar_cpu_true_divide_3d": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_scalar_cpu_true_divide_4d": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_sdpa_mha_prefill_causal": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_sdpa_mha_prefill": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_sdpa_mha_prefill_mask": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_softmax_softmax_2d_dim0": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_softmax_softmax_2d_dim1": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_softmax_softmax_3d_dim0": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_softmax_softmax_3d_dim1": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_softmax_softmax_3d_dim2": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_softplus_3d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_softplus_4d": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_squeeze_reduction_sum_3d0": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_squeeze_reduction_sum_4d0": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_squeeze_single_3d0": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_squeeze_single_4d0": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_sum_keepdim0_sum_3d_dim_1": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_sum_keepdim0_sum_3d_dim_2": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_sum_keepdim1_sum_3d_dim_1": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_sum_keepdim1_sum_3d_dim_2": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_t_2d_contiguous_1088x320": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_t_2d_contiguous_320x320": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_t_2d_contiguous_4096x49280": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_t_2d_contiguous_49280x4096": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_transpose_2d_contiguous_dim_0_1": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_transpose_2d_contiguous_dim_0_2": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_transpose_2d_contiguous_dim_0_2_same_dim": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_transpose_2d_contiguous_dim_1_2": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_transpose_2d_dim_1_2": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_transpose_3d_contiguous_dim_0_1": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_transpose_3d_contiguous_dim_0_2": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_transpose_3d_contiguous_dim_0_2_same_dim": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_transpose_3d_contiguous_dim_1_2": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_transpose_3d_dim_1_2": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_transpose_4d_contiguous_dim_0_1": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_transpose_4d_contiguous_dim_0_3": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_transpose_4d_contiguous_dim_1_2": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_transpose_4d_contiguous_dim_1_3": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_transpose_4d_contiguous_dim_2_3": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_transpose_4d_dim_1_2": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_transpose_4d_dim_1_3": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_transpose_4d_dim_2_3": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_unsqueeze_broadcast_add_1d0": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_unsqueeze_broadcast_add_2d0": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_unsqueeze_broadcast_add_2d1": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_unsqueeze_broadcast_add_3d0": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_unsqueeze_broadcast_add_3d1": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_unsqueeze_broadcast_add_3d2": TestFailure(
-        ("lx_planning_reduction"), is_skip=True
-    ),
-    "test_where_eq_1d256": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_where_ge_1d256": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_where_gt_1d256": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_where_le_1d256": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_where_lt_1d256": TestFailure(("lx_planning_reduction"), is_skip=True),
-    "test_where_ne_1d256": TestFailure(("lx_planning_reduction"), is_skip=True),
+    "test_add_broadcast_cpu_256_67x256",
+    "test_addmm_1152_10x1152_1152x1152",
+    "test_addmm_out_basic",
+    "test_addmm_scaled_alpha_0_5",
+    "test_alias_operands_cpu_pow_67x71x256",
+    "test_alias_operands_cube_256",
+    "test_alias_operands_cube_67x256",
+    "test_alias_operands_cube_67x71x256",
+    "test_alias_operands_double_67x71x256",
+    "test_alias_operands_square_67x71x256",
+    "test_alias_operands_triple_256",
+    "test_alias_operands_triple_67x256",
+    "test_alias_operands_triple_67x71x256",
+    "test_attention_3d_batch_size_1",
+    "test_attention_3d",
+    "test_attention_4d",
+    "test_bmm_bmm_2x256x1_2x1x128",
+    "test_bmm_bmm_2x55x2_2x2x99",
+    "test_bmm_bmm_2x99x65_2x65x55",
+    "test_bmm_bmm_3x17x256_3x256x128",
+    "test_bmm_bmm_3x1x256_3x256x128",
+    "test_cat_1d_dim0",
+    "test_cat_1d_dim0_three_tensors",
+    "test_cat_2d_dim0_diff_size",
+    "test_cat_2d_dim0_three_tensors",
+    "test_cat_2d_dim1_diff_size",
+    "test_cat_3d_dim0",
+    "test_cat_3d_dim1",
+    "test_cat_3d_dim1_size1",
+    "test_cat_3d_dim2",
+    "test_cat_4d_dim0",
+    "test_cat_4d_dim1",
+    "test_cat_4d_dim2",
+    "test_cat_4d_dim3_fp32",
+    "test_cat_4d_dim3",
+    "test_cmp_eq_1d",
+    "test_cmp_eq_2d",
+    "test_cmp_eq_3d",
+    "test_cmp_eq_broadcast",
+    "test_cmp_ge_1d",
+    "test_cmp_ge_2d",
+    "test_cmp_ge_3d",
+    "test_cmp_ge_broadcast",
+    "test_cmp_gt_1d",
+    "test_cmp_gt_2d",
+    "test_cmp_gt_3d",
+    "test_cmp_gt_broadcast",
+    "test_cmp_le_1d",
+    "test_cmp_le_2d",
+    "test_cmp_le_3d",
+    "test_cmp_le_broadcast",
+    "test_cmp_lt_1d",
+    "test_cmp_lt_2d",
+    "test_cmp_lt_3d",
+    "test_cmp_lt_broadcast",
+    "test_cmp_ne_1d",
+    "test_cmp_ne_2d",
+    "test_cmp_ne_3d",
+    "test_cmp_ne_broadcast",
+    "test_copy_roundtrip_4d_stick",
+    "test_fallback_1d",
+    "test_fallback_2d",
+    "test_fallback_3d",
+    "test_full_value_1",
+    "test_full_value_2",
+    "test_inplace_op_add_1d",
+    "test_inplace_op_add_2d",
+    "test_inplace_op_add_3d",
+    "test_inplace_op_mul_1d",
+    "test_inplace_op_mul_2d",
+    "test_inplace_op_mul_3d",
+    "test_item_from_computation",
+    "test_layernorm_2d",
+    "test_linear_2d_bias",
+    "test_linear_2d_no_bias",
+    "test_linear_3d_bias",
+    "test_linear_3d_no_bias",
+    "test_logical_not_logical_not_1d_fp16",
+    "test_logical_not_logical_not_2d_fp16",
+    "test_logical_not_logical_not_3d_fp16",
+    "test_logical_not_logical_not_4d_fp16",
+    "test_logical_not_logical_not_fp16_single_elem",
+    "test_matmul_matmul_2x3x55x2_2x3x2x99",
+    "test_matmul_matmul_2x3x99x1_2x3x1x55",
+    "test_matmul_matmul_2x3x99x65_2x3x65x55",
+    "test_matmul_matmul_2x55x2_2x2x99",
+    "test_matmul_matmul_2x64x128_128x16384",
+    "test_matmul_matmul_2x99x1_1x55",
+    "test_matmul_matmul_2x99x1_2x1x55",
+    "test_matmul_matmul_2x99x65_2x65x55",
+    "test_matmul_matmul_3x17x256_3x256x128",
+    "test_matmul_matmul_3x18x128x256_3x18x256x128",
+    "test_matmul_matmul_3x1x256_3x256x128",
+    "test_matmul_matmul_512x256_256x128",
+    "test_matmul_matmul_55x2_2x99",
+    "test_matmul_matmul_99x1_1x55",
+    "test_matmul_matmul_99x65_65x55",
+    "test_max_keepdim0_sum_2d_dim_0",
+    "test_max_keepdim0_sum_2d_dim_1",
+    "test_max_keepdim0_sum_3d_dim_1",
+    "test_max_keepdim0_sum_3d_dim_2",
+    "test_max_keepdim0_sum_4d_dim_0",
+    "test_max_keepdim0_sum_4d_dim_1",
+    "test_max_keepdim0_sum_4d_dim_2",
+    "test_max_keepdim0_sum_4d_dim_3",
+    "test_max_keepdim1_sum_2d_dim_0",
+    "test_max_keepdim1_sum_2d_dim_1",
+    "test_max_keepdim1_sum_3d_dim_0",
+    "test_max_keepdim1_sum_3d_dim_1",
+    "test_max_keepdim1_sum_3d_dim_2",
+    "test_max_keepdim1_sum_4d_dim_0",
+    "test_max_keepdim1_sum_4d_dim_1",
+    "test_max_keepdim1_sum_4d_dim_2",
+    "test_max_keepdim1_sum_4d_dim_3",
+    "test_max_sub_broadcast_2d_dim_0",
+    "test_max_sub_broadcast_2d_dim_1",
+    "test_max_sub_broadcast_4d_dim_0",
+    "test_max_sub_broadcast_4d_dim_1",
+    "test_max_sub_broadcast_4d_dim_2",
+    "test_max_sub_broadcast_4d_dim_3",
+    "test_mm_mm_55x2_2x99",
+    "test_mm_mm_67x255_255x128",
+    "test_mm_mm_67x256_256x128",
+    "test_mm_mm_67x67_67x67",
+    "test_pad_2d_both_dims",
+    "test_pad_2d_dim0_left",
+    "test_pad_2d_dim0_left_only",
+    "test_pad_2d_last_dim_left_and_right_stick_aligned",
+    "test_pad_2d_last_dim_left_stick_aligned",
+    "test_pad_2d_last_dim_left_two_sticks",
+    "test_pad_2d_last_dim_right",
+    "test_pad_3d_dim0_left",
+    "test_pad_3d_dim1_left",
+    "test_pad_3d_dim1_right",
+    "test_pad_3d_last_dim_right",
+    "test_pad_4d_dim0_left",
+    "test_permute_3d_0_2_1",
+    "test_permute_4d_0_3_1_2",
+    "test_permute_4d_0_m2_m1_1",
+    "test_permute_5d_0_2_3_4_1",
+    "test_pointwise_binary_op_add_256_256",
+    "test_pointwise_binary_op_add_67x256_67x256",
+    "test_pointwise_binary_op_add_67x71x256_67x71x256",
+    "test_pointwise_binary_op_add_7x12x32x64_7x12x32x64",
+    "test_pointwise_binary_op_div_256_256",
+    "test_pointwise_binary_op_div_67x256_67x256",
+    "test_pointwise_binary_op_div_67x71x256_67x71x256",
+    "test_pointwise_binary_op_div_7x12x32x64_7x12x32x64",
+    "test_pointwise_binary_op_fp32_add_fp32",
+    "test_pointwise_binary_op_fp32_div_fp32",
+    "test_pointwise_binary_op_fp32_mul_fp32",
+    "test_pointwise_binary_op_fp32_sub_fp32",
+    "test_pointwise_binary_op_mul_256_256",
+    "test_pointwise_binary_op_mul_67x256_67x256",
+    "test_pointwise_binary_op_mul_67x71x256_67x71x256",
+    "test_pointwise_binary_op_mul_7x12x32x64_7x12x32x64",
+    "test_pointwise_binary_op_sub_256_256",
+    "test_pointwise_binary_op_sub_67x256_67x256",
+    "test_pointwise_binary_op_sub_67x71x256_67x71x256",
+    "test_pointwise_binary_op_sub_7x12x32x64_7x12x32x64",
+    "test_pointwise_range_op_clamp_fp16",
+    "test_pointwise_unary_op_abs_67x71x256",
+    "test_pointwise_unary_op_exp_67x71x256",
+    "test_pointwise_unary_op_neg_67x71x256",
+    "test_pointwise_unary_op_reciprocal_67x256",
+    "test_pointwise_unary_op_reciprocal_67x71x256",
+    "test_pointwise_unary_op_relu_67x71x256",
+    "test_pointwise_unary_op_tanh_67x71x256",
+    "test_rmsnorm_2d",
+    "test_rmsnorm_3d",
+    "test_rmsnorm_4d",
+    "test_scalar_cpu_add_1d",
+    "test_scalar_cpu_add_2d",
+    "test_scalar_cpu_add_3d",
+    "test_scalar_cpu_add_4d",
+    "test_scalar_cpu_combined_1d",
+    "test_scalar_cpu_combined_2d",
+    "test_scalar_cpu_combined_3d",
+    "test_scalar_cpu_combined_4d",
+    "test_scalar_cpu_div_1d",
+    "test_scalar_cpu_div_2d",
+    "test_scalar_cpu_div_3d",
+    "test_scalar_cpu_div_4d",
+    "test_scalar_cpu_mul_1d",
+    "test_scalar_cpu_mul_2d",
+    "test_scalar_cpu_mul_3d",
+    "test_scalar_cpu_mul_4d",
+    "test_scalar_cpu_sub_1d",
+    "test_scalar_cpu_sub_2d",
+    "test_scalar_cpu_sub_3d",
+    "test_scalar_cpu_sub_4d",
+    "test_scalar_cpu_true_divide_1d",
+    "test_scalar_cpu_true_divide_2d",
+    "test_scalar_cpu_true_divide_3d",
+    "test_scalar_cpu_true_divide_4d",
+    "test_sdpa_mha_prefill_causal",
+    "test_sdpa_mha_prefill",
+    "test_sdpa_mha_prefill_mask",
+    "test_softmax_softmax_2d_dim0",
+    "test_softmax_softmax_2d_dim1",
+    "test_softmax_softmax_3d_dim0",
+    "test_softmax_softmax_3d_dim1",
+    "test_softmax_softmax_3d_dim2",
+    "test_softplus_3d",
+    "test_softplus_4d",
+    "test_squeeze_reduction_sum_3d0",
+    "test_squeeze_reduction_sum_4d0",
+    "test_squeeze_single_3d0",
+    "test_squeeze_single_4d0",
+    "test_sum_keepdim0_sum_3d_dim_1",
+    "test_sum_keepdim0_sum_3d_dim_2",
+    "test_sum_keepdim1_sum_3d_dim_1",
+    "test_sum_keepdim1_sum_3d_dim_2",
+    "test_t_2d_contiguous_1088x320",
+    "test_t_2d_contiguous_320x320",
+    "test_t_2d_contiguous_4096x49280",
+    "test_t_2d_contiguous_49280x4096",
+    "test_transpose_2d_contiguous_dim_0_1",
+    "test_transpose_2d_contiguous_dim_0_2",
+    "test_transpose_2d_contiguous_dim_0_2_same_dim",
+    "test_transpose_2d_contiguous_dim_1_2",
+    "test_transpose_2d_dim_1_2",
+    "test_transpose_3d_contiguous_dim_0_1",
+    "test_transpose_3d_contiguous_dim_0_2",
+    "test_transpose_3d_contiguous_dim_0_2_same_dim",
+    "test_transpose_3d_contiguous_dim_1_2",
+    "test_transpose_3d_dim_1_2",
+    "test_transpose_4d_contiguous_dim_0_1",
+    "test_transpose_4d_contiguous_dim_0_3",
+    "test_transpose_4d_contiguous_dim_1_2",
+    "test_transpose_4d_contiguous_dim_1_3",
+    "test_transpose_4d_contiguous_dim_2_3",
+    "test_transpose_4d_dim_1_2",
+    "test_transpose_4d_dim_1_3",
+    "test_transpose_4d_dim_2_3",
+    "test_unsqueeze_broadcast_add_1d0",
+    "test_unsqueeze_broadcast_add_2d0",
+    "test_unsqueeze_broadcast_add_2d1",
+    "test_unsqueeze_broadcast_add_3d0",
+    "test_unsqueeze_broadcast_add_3d1",
+    "test_unsqueeze_broadcast_add_3d2",
+    "test_where_eq_1d256",
+    "test_where_ge_1d256",
+    "test_where_gt_1d256",
+    "test_where_le_1d256",
+    "test_where_lt_1d256",
+    "test_where_ne_1d256",
 }
 
 
