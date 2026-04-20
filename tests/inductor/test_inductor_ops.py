@@ -3314,7 +3314,7 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
         def fn(x):
             return torch.nn.functional.pad(x, pad)
 
-        compare_with_cpu(fn, x)
+        self.compare_with_cpu(fn, x)
 
     def test_pad_unsupported(self):
         """Padding cases that raise Unsupported due to logical decomposition constraints."""
@@ -3603,7 +3603,7 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
         def fn(x):
             return op(dim, index, x)
 
-        compare_with_cpu(fn, x, run_eager=False)
+        self.compare_with_cpu(fn, x, run_eager=False)
 
     def test_slice_cpu(self, op, dim, index, x):
         def fn(x):
@@ -3616,7 +3616,7 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
             elif dim == 2:
                 return op(dim, index, x[:, :, start:end])
 
-        compare_with_cpu(fn, x, run_eager=False, cpu_compile=False)
+        self.compare_with_cpu(fn, x, run_eager=False, cpu_compile=False)
 
     def test_rope_cpu(self, q, freqs):
         def fn(q, freqs):
