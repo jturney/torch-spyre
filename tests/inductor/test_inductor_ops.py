@@ -3229,7 +3229,7 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
             dst_t.copy_(src)
             return dst_t.contiguous()
 
-        compare_with_cpu(fn, dst, src, run_eager=False)
+        self.compare_with_cpu(fn, dst, src, run_eager=False)
 
     @pytest.mark.filterwarnings("ignore::torch_spyre.ops.fallbacks.FallbackWarning")
     def test_fallback_cpu(self, x):
