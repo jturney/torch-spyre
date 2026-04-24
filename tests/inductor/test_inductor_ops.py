@@ -3030,7 +3030,7 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
 
     @pytest.mark.filterwarnings("ignore::torch_spyre.ops.fallbacks.FallbackWarning")
     def test_fallback_binary_op_cpu(self, op, x, y):
-        compare_with_cpu(op, x, y, run_eager=False)
+        self.compare_with_cpu(op, x, y, run_eager=False)
 
     # Increased mm test tolerance for splitk
     def test_mm_relaxed(self, op, a, b):
@@ -3257,7 +3257,7 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
             y.fill_(1.0)
             return y
 
-        compare_with_cpu(fn, x)
+        self.compare_with_cpu(fn, x)
 
     def test_empty_like_dtype_override_cpu(self, x):
         """Test empty_like with dtype override (fp16->fp32 or fp32->fp16)."""
@@ -3269,7 +3269,7 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
             y.fill_(1.0)
             return y
 
-        compare_with_cpu(fn, x)
+        self.compare_with_cpu(fn, x)
 
     def test_empty_like_memory_format_cpu(self, x):
         """Test empty_like with memory_format on non-contiguous (transposed) input."""
@@ -3283,7 +3283,7 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
             return y
 
         # Note: .contiguous() causes issues with eager mode per existing patterns
-        compare_with_cpu(fn, x, run_eager=False)
+        self.compare_with_cpu(fn, x, run_eager=False)
 
     @pytest.mark.filterwarnings("ignore::torch_spyre.ops.fallbacks.FallbackWarning")
     def test_new_ones_cpu(self, x, y):
@@ -3629,7 +3629,7 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
             q_out = sum_out.flatten(3)
             return q_out
 
-        compare_with_cpu(fn, q, freqs, cpu_compile=False)
+        self.compare_with_cpu(fn, q, freqs, cpu_compile=False)
 
     def test_sum_eager(self, op, dim: int, keepdim: bool, x):
         self.compare_with_cpu(lambda x: op(x, dim=dim, keepdim=keepdim), x)
