@@ -223,7 +223,7 @@ copy_tests(
 )
 
 
-REDUCTION_TEST_FAILURES = {
+REDUCTION_TEST_FAILURES = [
     "test_activation_fn_mish_fp16",
     "test_activation_fn_silu_fp16",
     "test_addmm_out_basic",
@@ -355,7 +355,7 @@ REDUCTION_TEST_FAILURES = {
     "test_tril_3d",
     "test_triu_2d",
     "test_triu_3d",
-}
+]
 
 
 class LxPlanningTwoOpReductionTest(unittest.TestCase):

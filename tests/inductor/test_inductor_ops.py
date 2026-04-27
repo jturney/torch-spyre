@@ -3090,7 +3090,9 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
     @pytest.mark.filterwarnings("ignore:Backend Spyre does not support int64")
     def test_reduce_keepdim0_cpu_no_eager(self, op, dim: int, x):
         # aten::max.dim and aten::amin are not registered for Spyre eager dispatch
-        self.compare_with_cpu(lambda x: op(x, dim=dim, keepdim=False), x, run_eager=False)
+        self.compare_with_cpu(
+            lambda x: op(x, dim=dim, keepdim=False), x, run_eager=False
+        )
 
     @pytest.mark.filterwarnings("ignore::torch_spyre.ops.fallbacks.FallbackWarning")
     @pytest.mark.filterwarnings("ignore:Backend Spyre does not support int64")
