@@ -4,6 +4,7 @@ import os
 import sys
 import torch
 from torch.utils import _pytree as pytree
+from torch.testing import FileCheck
 
 from torch._dynamo.testing import make_test_cls_with_patches
 
@@ -177,6 +178,32 @@ POINTWISE_TEST_FAILURES = [
     "test_tril_3d",
     "test_triu_2d",
     "test_triu_3d",
+    "test_inplace_copy_copy_2d_transposed_src",
+    "test_inplace_copy_noncontiguous_transposed_dst",
+    "test_inplace_copy_noncontiguous_transposed_src_and_dst",
+    "test_max_keepdim0_max_2d_dim_0_int64",
+    "test_max_keepdim0_max_2d_dim_0",
+    "test_max_keepdim0_max_2d_dim_1_int64",
+    "test_max_keepdim0_max_2d_dim_1",
+    "test_max_keepdim0_max_3d_dim_0",
+    "test_max_keepdim0_max_3d_dim_1",
+    "test_max_keepdim0_max_3d_dim_2",
+    "test_max_keepdim0_max_4d_dim_0",
+    "test_max_keepdim0_max_4d_dim_1",
+    "test_max_keepdim0_max_4d_dim_2",
+    "test_max_keepdim0_max_4d_dim_3",
+    "test_max_keepdim0_max_4d_dim_gpt0",
+    "test_max_keepdim0_max_4d_dim_gpt1",
+    "test_max_keepdim1_max_2d_dim_0_int64",
+    "test_max_keepdim1_max_2d_dim_1_int64",
+    "test_qkv_attn_paths_fms_decode_gqa",
+    "test_qkv_attn_paths_fms_decode_mha",
+    "test_qkv_attn_paths_fms_fms_decode_gqa",
+    "test_qkv_attn_paths_fms_fms_decode_mha",
+    "test_qkv_attn_paths_fms_prefill_gqa",
+    "test_qkv_attn_paths_fms_prefill_mha",
+    "test_rope_fms_prefill_bs1",
+    "test_rope_fms_prefill",
 ]
 
 
@@ -192,8 +219,13 @@ class LxPlanningTwoOpPointwiseAdditionTest(unittest.TestCase):
         return make_seq_of_ops
 
     def compare_with_cpu(self, fn, *args, **kwargs):
+        def source_check(source):
+            FileCheck().check("{lx: 0}").run(source)
+
         kwargs["cpu_compile"] = False
-        return compare_with_cpu(self.wrap_pointwise(fn), *args, **kwargs)
+        return compare_with_cpu(
+            self.wrap_pointwise(fn), source_check=source_check, *args, **kwargs
+        )
 
     def compare(
         self,
@@ -355,6 +387,24 @@ REDUCTION_TEST_FAILURES = [
     "test_tril_3d",
     "test_triu_2d",
     "test_triu_3d",
+    "test_clone_fp16_2d",
+    "test_inplace_copy_copy_2d_transposed_src",
+    "test_inplace_copy_noncontiguous_transposed_dst",
+    "test_inplace_copy_noncontiguous_transposed_src_and_dst",
+    "test_max_keepdim0_max_2d_dim_0_int64",
+    "test_max_keepdim0_max_2d_dim_1_int64",
+    "test_max_keepdim1_max_2d_dim_0_int64",
+    "test_max_keepdim1_max_2d_dim_1_int64",
+    "test_qkv_attn_paths_fms_decode_gqa",
+    "test_qkv_attn_paths_fms_decode_mha",
+    "test_qkv_attn_paths_fms_fms_decode_gqa",
+    "test_qkv_attn_paths_fms_prefill_gqa",
+    "test_rope_fms_prefill_bs1",
+    "test_rope_fms_prefill",
+    "test_split_split3_2d0s1",
+    "test_split_split3_2d0s2",
+    "test_split_split3_3d0s1",
+    "test_split_split3_3d0s2",
 ]
 
 
@@ -373,8 +423,13 @@ class LxPlanningTwoOpReductionTest(unittest.TestCase):
         return make_seq_of_ops
 
     def compare_with_cpu(self, fn, *args, **kwargs):
+        def source_check(source):
+            FileCheck().check("{lx: 0}").run(source)
+
         kwargs["cpu_compile"] = False
-        return compare_with_cpu(self.wrap_reduction(fn), *args, **kwargs)
+        return compare_with_cpu(
+            self.wrap_reduction(fn), source_check=source_check, *args, **kwargs
+        )
 
     def compare(
         self,

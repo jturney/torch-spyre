@@ -3676,7 +3676,7 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
             return q_attn, k_attn, v_attn
 
         # TODO(aviros): Add support for missing eager ops and debug remaining issues to match eager results
-        compare_with_cpu(fn, q, k, v, cpu_compile=False, run_eager=False)
+        self.compare_with_cpu(fn, q, k, v, cpu_compile=False, run_eager=False)
 
 
 if __name__ == "__main__":

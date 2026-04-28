@@ -20,6 +20,7 @@ import torch
 import os
 import pytest
 import unittest
+from torch._inductor.utils import run_and_get_code
 
 DEVICE = torch.device("spyre")
 
@@ -517,7 +518,15 @@ def _to_cpu(result, device):
         return result
 
 
-def _compile_and_run(fn, args, device, backend=None, needs_device=False, compile=True):
+def _compile_and_run(
+    fn,
+    args,
+    device,
+    backend="inductor",
+    needs_device=False,
+    compile=True,
+    source_check=None,
+):
     """Compile and execute function on specified device/backend, returning result on CPU."""
     torch._dynamo.reset_code_caches()
     device = torch.device(device) if isinstance(device, str) else device
@@ -527,10 +536,16 @@ def _compile_and_run(fn, args, device, backend=None, needs_device=False, compile
     device_kwargs = {"device": device} if needs_device else {}
 
     if compile:
-        if backend:
-            result = torch.compile(fn, backend=backend)(*device_args, **device_kwargs)
+        comp_func = torch.compile(fn, backend=backend)
+
+        if source_check is not None and device == "sypre":
+            result, source_codes = run_and_get_code(
+                comp_func, *device_args, **device_kwargs
+            )
+            if len(source_codes) > 0:
+                source_check(source_codes[0])
         else:
-            result = torch.compile(fn)(*device_args, **device_kwargs)
+            result = comp_func(*device_args, **device_kwargs)
     else:
         result = fn(*device_args, **device_kwargs)
 
@@ -578,6 +593,7 @@ def compare_with_cpu(
     target=None,
     run_eager=True,
     run_compile=True,
+    source_check=None,
 ):
     """Compare Spyre execution against CPU for one or both Spyre execution paths.
 
@@ -620,7 +636,12 @@ def compare_with_cpu(
             target
             if target is not None
             else _compile_and_run(
-                fn, args, DEVICE, needs_device=needs_device, compile=compiled
+                fn,
+                args,
+                DEVICE,
+                needs_device=needs_device,
+                compile=compiled,
+                source_check=source_check,
             )
         )
 
