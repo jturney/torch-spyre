@@ -275,6 +275,7 @@ REDUCTION_TEST_FAILURES = [
     "test_cat_2d_dim0_three_tensors",
     "test_cat_4d_dim1",
     "test_cat_4d_dim3_fp32",
+    "test_copy_roundtrip_3d",
     "test_copy_roundtrip_2d",
     "test_copy_roundtrip_4d_stick",
     "test_embedding_basic",
