@@ -20,11 +20,10 @@ from utils_inductor import (
     ParameterizedTestMeta,
     cached_randn,
     cached_xavier,
-    compare,
-    compare_with_cpu,
     make_param_dict,
     unique_randn_along_dim,
 )
+import utils_inductor
 
 POINTWISE_UNARY_OPS_DICT = {
     "abs": torch.abs,
@@ -3122,7 +3121,9 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
         # torch.topk returns (values, indices); only compare values since
         # index tie-breaking can differ between backends.
         # aten::topk is not registered for Spyre eager dispatch.
-        self.compare_with_cpu(lambda x: torch.topk(x, k, dim=dim)[0], x, run_eager=False)
+        self.compare_with_cpu(
+            lambda x: torch.topk(x, k, dim=dim)[0], x, run_eager=False
+        )
 
     def test_max_sub_broadcast(self, dim: int, x):
         def fn(x):

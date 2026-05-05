@@ -12,14 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
-import dataclasses
 import functools
-import inspect
 import torch
 import os
 import pytest
-import unittest
 from torch._inductor.utils import run_and_get_code
 
 DEVICE = torch.device("spyre")
@@ -538,7 +534,7 @@ def _compile_and_run(
     if compile:
         comp_func = torch.compile(fn, backend=backend)
 
-        if source_check is not None and device == "sypre":
+        if source_check is not None and device == "spyre":
             result, source_codes = run_and_get_code(
                 comp_func, *device_args, **device_kwargs
             )
