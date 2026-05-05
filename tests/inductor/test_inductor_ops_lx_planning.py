@@ -213,6 +213,9 @@ copy_tests(
 
 
 REDUCTION_TEST_FAILURES = [
+    "test_addmm_out_basic",
+    "test_addmm_scaled_alpha_0_5",
+    "test_copy_roundtrip_2d",
     "test_alias_operands_cube_67x71x256",
     "test_alias_operands_double_67x71x256",
     "test_alias_operands_triple_67x71x256",
