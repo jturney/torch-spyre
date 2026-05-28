@@ -1201,6 +1201,34 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
                 ),
             },
         },
+        ("test_cmp_scalar", "test_cmp_scalar_cpu"): {
+            "ops_dict": {
+                "eq": torch.eq,
+                "ne": torch.ne,
+                "ge": torch.ge,
+                "le": torch.le,
+                "gt": torch.gt,
+                "lt": torch.lt,
+            },
+            "param_sets": {
+                "1d_fp16_zero": (
+                    cached_randn((256,), dtype=torch.float16),
+                    0,
+                ),
+                "1d_fp16_float": (
+                    cached_randn((256,), dtype=torch.float16),
+                    0.5,
+                ),
+                "2d_fp16_zero": (
+                    cached_randn((64, 128), dtype=torch.float16),
+                    0,
+                ),
+                "3d_fp16_zero": (
+                    cached_randn((2, 32, 128), dtype=torch.float16),
+                    0,
+                ),
+            },
+        },
         (
             "test_where",
             "test_where_cpu",
@@ -3704,6 +3732,12 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
     def test_cmp_scalar_int64_cpu(self, op, x, scalar):
         # Test comparison ops with int64 tensors and scalar values.
         self.compare_with_cpu(op, x, scalar, run_eager=True, run_compile=False)
+
+    def test_cmp_scalar_cpu(self, op, x, scalar):
+        # Compiled-path comparison of a tensor against a Python scalar.
+        # Without the aten.{op}.Scalar decompositions in decompositions.py the
+        # kernel rejects the scalar Constant operand. See #2222.
+        self.compare_with_cpu(op, x, scalar, run_eager=False)
 
     def test_linear_fn(self, x, weight, bias):
         # NOTE: relaxing atol from 2e-1 to 3e-1 for multi-dim work division, single element fails without

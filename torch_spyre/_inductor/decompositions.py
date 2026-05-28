@@ -692,6 +692,33 @@ def sub_with_alpha(
         return torch.sub(self, scaled_other)
 
 
+# The Spyre kernel rejects scalar Constant operands to comparison ops in
+# spyre_kernel.py store(). Materialize the scalar as a broadcast tensor via
+# full_like so the comparison sees two TensorAccess arguments. See #2222.
+#
+# Registered only in the inductor decomp table (not via PrivateUse1) because
+# the Constant rejection is a compile-time bug; the eager path is unaffected
+# and rewriting it would change behavior of existing eager fallbacks.
+def _make_cmp_scalar_decomp(tensor_op):
+    def decomp(self: torch.Tensor, other) -> torch.Tensor:
+        return tensor_op(self, torch.ops.aten.full_like(self, other))
+
+    return decomp
+
+
+for _scalar_op, _tensor_op in (
+    (torch.ops.aten.gt.Scalar, torch.ops.aten.gt.Tensor),
+    (torch.ops.aten.lt.Scalar, torch.ops.aten.lt.Tensor),
+    (torch.ops.aten.ge.Scalar, torch.ops.aten.ge.Tensor),
+    (torch.ops.aten.le.Scalar, torch.ops.aten.le.Tensor),
+    (torch.ops.aten.eq.Scalar, torch.ops.aten.eq.Tensor),
+    (torch.ops.aten.ne.Scalar, torch.ops.aten.ne.Tensor),
+):
+    decomp.register_decomposition([_scalar_op], spyre_decompositions)(
+        _make_cmp_scalar_decomp(_tensor_op)
+    )
+
+
 ###############################################################################################
 ##                           Register custom kernels for Spyre.                              ##
 ###############################################################################################
