@@ -17,7 +17,12 @@ import math
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
-from torch._inductor.ir import ComputedBuffer, Operation, MutationLayoutSHOULDREMOVE
+from torch._inductor.ir import (
+    ComputedBuffer, 
+    ExternKernel,
+    Operation,
+    MutationLayoutSHOULDREMOVE,
+)
 from torch._inductor.graph import GraphLowering
 
 from torch_spyre._inductor.pass_utils import (
@@ -100,6 +105,12 @@ class ScratchpadAllocator(ABC):
         for op in graph.operations:
             if not self._op_output_good_for_lx_reuse(op):
                 drop_list.add(op.name)
+
+        # file out buffers read by extern kernels (e.g. eager fallbacks):
+        # these are accessed host-side and must stay in HBM
+        for op in graph.operations:
+            if isinstance(op, ExternKernel):
+                drop_list.update(dep.name for dep in op.get_read_writes().reads)
 
         # filter out core division mismatches
         drop_list.update(

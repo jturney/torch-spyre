@@ -132,8 +132,6 @@ POINTWISE_TEST_FAILURES = [
     "test_einsum_einsum_67x255_255x128",
     "test_einsum_einsum_67x256_256x128",
     "test_einsum_einsum_67x67_67x67",
-    "test_fallback_1d",
-    "test_fallback_2d",
     "test_fallback_3d",
     # torch.flatten tests - Contiguous access pattern with span of 4 elements
     # within 64-wide padded stick not supported. Requires Mod(d0, ELEMS_PER_STICK)
@@ -176,11 +174,6 @@ POINTWISE_TEST_FAILURES = [
     "test_pad_3d_dim1_right",
     "test_pad_3d_last_dim_right",
     "test_pad_4d_dim0_left",
-    "test_pointwise_binary_op_int64_add_1d",
-    "test_pointwise_binary_op_int64_maximum_1d",
-    "test_pointwise_binary_op_int64_minimum_1d",
-    "test_pointwise_binary_op_int64_mul_1d",
-    "test_pointwise_binary_op_int64_sub_1d",
     "test_qkv_attn_paths_fms_decode_gqa",
     "test_reduce_edge_multidim_keepdim0_sum_large_2d_dim_01_all",
     "test_reduce_edge_multidim_keepdim1_sum_large_2d_dim_01_all",
@@ -286,9 +279,6 @@ REDUCTION_TEST_FAILURES = [
     "test_einsum_einsum_67x255_255x128",
     "test_einsum_einsum_67x256_256x128",
     "test_einsum_einsum_67x67_67x67",
-    "test_fallback_1d",
-    "test_fallback_2d",
-    "test_fallback_3d",
     # torch.flatten tests - Contiguous access pattern with span of 4 elements
     # within 64-wide padded stick not supported. Requires Mod(d0, ELEMS_PER_STICK)
     # support for partially-filled contiguous regions. See PR #1866.
@@ -326,11 +316,6 @@ REDUCTION_TEST_FAILURES = [
     "test_pad_3d_dim1_right",
     "test_pad_3d_last_dim_right",
     "test_pad_4d_dim0_left",
-    "test_pointwise_binary_op_int64_add_1d",
-    "test_pointwise_binary_op_int64_maximum_1d",
-    "test_pointwise_binary_op_int64_minimum_1d",
-    "test_pointwise_binary_op_int64_mul_1d",
-    "test_pointwise_binary_op_int64_sub_1d",
     "test_permute_4d_0_3_1_2",
     "test_permute_4d_0_m2_m1_1",
     "test_pointwise_binary_op_add_67x71x256_67x71x256",
