@@ -18,7 +18,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Optional
 
 from torch._inductor.ir import (
-    ComputedBuffer, 
+    ComputedBuffer,
     ExternKernel,
     Operation,
     MutationLayoutSHOULDREMOVE,
