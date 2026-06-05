@@ -600,6 +600,13 @@ at::Tensor spyre_copy_from(const at::Tensor& self, const at::Tensor& dst,
   const at::Tensor* copy_to = &dst;
   bool non_overlapping_and_dense = true;
 
+  // D2H into bfloat16: device data is stored as dlfloat16 (1-6-9), and the
+  // runtime DCI truncates the mantissa when narrowing to bfloat16 (1-8-7).
+  // Stage through float32 (exact for dlfloat16), then round to nearest-even
+  // on the host.
+  const bool stage_bf16_via_fp32 =
+      !dst.is_privateuseone() && dst.scalar_type() == at::kBFloat16;
+
   if (dst.is_privateuseone()) {
     stream = getCurrentStream(dst.device());
   } else {
@@ -630,15 +637,21 @@ at::Tensor spyre_copy_from(const at::Tensor& self, const at::Tensor& dst,
         c10::IntArrayRef alloc_strides(spyre_impl->dma_strides);
         alloc_view = at::as_strided(self, alloc_sizes, alloc_strides,
                                     /*storage_offset=*/0);
-        cpu_alloc = at::empty(alloc_sizes, dst.options());
+        cpu_alloc = at::empty(alloc_sizes, stage_bf16_via_fp32
+                                               ? dst.options().dtype(at::kFloat)
+                                               : dst.options());
         copy_from = &alloc_view;
+        copy_to = &cpu_alloc;
+      } else if (stage_bf16_via_fp32) {
+        cpu_alloc = at::empty(dst.sizes(), dst.options().dtype(at::kFloat));
         copy_to = &cpu_alloc;
       }
     }
   }
 
+  const bool staged = (copy_to == &cpu_alloc);
   stream.copyAsync(*copy_from, *copy_to);
-  if (!non_blocking) {
+  if (!non_blocking || staged) {
     stream.synchronize();
   }
 
@@ -646,6 +659,8 @@ at::Tensor spyre_copy_from(const at::Tensor& self, const at::Tensor& dst,
     at::Tensor cpu_view = cpu_alloc.as_strided(self.sizes(), self.strides(),
                                                self.storage_offset());
     dst.copy_(cpu_view);
+  } else if (staged) {
+    dst.copy_(cpu_alloc);
   }
   return dst;
 }
