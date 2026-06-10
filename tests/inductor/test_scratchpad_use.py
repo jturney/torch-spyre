@@ -304,9 +304,9 @@ class TestCloneAtGraphBoundaries(TestScratchpadUsage):
 
     @contextmanager
     def clone_patcher(self):
-        OP_OUTPUT_GOOD_FOR_LX_REUSE.append("clone")
+        OP_OUTPUT_GOOD_FOR_LX_REUSE.add("clone")
         yield
-        OP_OUTPUT_GOOD_FOR_LX_REUSE.pop()
+        OP_OUTPUT_GOOD_FOR_LX_REUSE.discard("clone")
 
     def setUp(self):
         # self.patchers is initialised in __init__ (not in the base setUp), so we can

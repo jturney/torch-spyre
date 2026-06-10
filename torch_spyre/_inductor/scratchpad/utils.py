@@ -22,7 +22,10 @@ from torch_spyre._inductor.pass_utils import _per_core_view_on_buf
 
 # Op outputs eligible for LX-pinning. `amax` is the lowered form of
 # `max`; both names are listed to match whichever the IR shows.
-OP_OUTPUT_GOOD_FOR_LX_REUSE = [
+# A mutable set rather than frozenset: tests toggle "clone" membership
+# in place to exercise the clone-at-boundary path (see clone_patcher in
+# tests/inductor/test_scratchpad_use.py).
+OP_OUTPUT_GOOD_FOR_LX_REUSE = {
     "max",
     "amax",
     "sum",
@@ -33,14 +36,16 @@ OP_OUTPUT_GOOD_FOR_LX_REUSE = [
     "mean",
     "add",
     "rsqrt",
-]
+}
 
-OP_GOOD_FOR_LX_INPLACE = [
-    "exp",
-    "sub",
-    "add",
-    "rsqrt",
-]
+OP_GOOD_FOR_LX_INPLACE = frozenset(
+    {
+        "exp",
+        "sub",
+        "add",
+        "rsqrt",
+    }
+)
 
 
 def clone_at_graph_boundaries() -> bool:
