@@ -25,18 +25,20 @@ from torch_spyre._inductor.pass_utils import _per_core_view_on_buf
 # A mutable set rather than frozenset: tests toggle "clone" membership
 # in place to exercise the clone-at-boundary path (see clone_patcher in
 # tests/inductor/test_scratchpad_use.py).
-OP_OUTPUT_GOOD_FOR_LX_REUSE = {
-    "max",
-    "amax",
-    "sum",
-    # "clone",
-    "exp",
-    "sub",
-    "mul",
-    "mean",
-    "add",
-    "rsqrt",
-}
+OP_OUTPUT_GOOD_FOR_LX_REUSE = frozenset(
+    {
+        "max",
+        "amax",
+        "sum",
+        # "clone",
+        "exp",
+        "sub",
+        "mul",
+        "mean",
+        "add",
+        "rsqrt",
+    }
+)
 
 OP_GOOD_FOR_LX_INPLACE = frozenset(
     {
@@ -51,7 +53,7 @@ OP_GOOD_FOR_LX_INPLACE = frozenset(
 def clone_at_graph_boundaries() -> bool:
     """True when clone ops are eligible for LX, enabling clone insertion at graph
     input/output boundaries so those buffers can also be LX-pinned."""
-    return "clone" in OP_OUTPUT_GOOD_FOR_LX_REUSE
+    return config.allow_all_ops_in_lx_planning or "clone" in OP_OUTPUT_GOOD_FOR_LX_REUSE
 
 
 class GraphView:
