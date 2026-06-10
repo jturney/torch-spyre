@@ -305,7 +305,7 @@ class TestCloneAtGraphBoundaries(TestScratchpadUsage):
 
     def setUp(self):
         self.patchers.append(
-            ts_inductor_config.path("allow_all_ops_in_lx_planning", True)
+            ts_inductor_config.patch("allow_all_ops_in_lx_planning", True)
         )
         super().setUp()
 
