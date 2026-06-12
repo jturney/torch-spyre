@@ -298,15 +298,13 @@ class TestCloneAtGraphBoundaries(TestScratchpadUsage):
     - graph outputs that are also read inside the graph get a clone (for the HBM return
       value), while the original buffer is pinned to LX
 
-    Enabling ``allow_all_ops_in_lx_planning`` makes clone outputs LX-eligible
-    and flips ``clone_at_graph_boundaries()`` on, so the boundary clone path is
-    excercised.
+    Enabling ``lx_boundary_clones`` flips ``clone_at_graph_boundaries()`` on and
+    makes the inserted clone outputs LX-eligible, so the boundary clone path is
+    exercised.
     """
 
     def setUp(self):
-        self.patchers.append(
-            ts_inductor_config.patch("allow_all_ops_in_lx_planning", True)
-        )
+        self.patchers.append(ts_inductor_config.patch("lx_boundary_clones", True))
         super().setUp()
 
     def _compile_and_inspect(
