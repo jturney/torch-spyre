@@ -446,17 +446,17 @@ class TestCloneAtGraphBoundaries(TestScratchpadUsage):
             "Multi-offset input read produced wrong values under LX planning",
         )
 
-    def test_input_feeding_reduction_is_not_cloned(self):
-        """A graph input read by a reduction must not be LX-cloned.
+    def test_input_feeding_reduction_is_cloned_and_correct(self):
+        """A graph input read by a reduction is LX-cloned, with the clone's
+        per-core split re-keyed correctly.
 
-        push_allocation_with_clone copies the first consumer's
-        op_it_space_splits onto the clone; a reduction consumer's splits are
-        keyed to its reduced-shape output and mis-map onto the full-shape
-        clone, splitting the wrong axis (wrong values / SDSC abort at
-        multi-core). The numerical failure only manifests when work is split
-        across cores; here (sencores=1) we assert the guard's decision: no
-        boundary clone is inserted for the reduction-fed input, and the result
-        is correct. Multi-core numerical coverage lives in
+        push_allocation_with_clone re-keys the consumer's op_it_space_splits
+        through the buffer's strides before assigning them to the clone. A reduction consumer's split is keyed to its
+        reduced-shape output; copied verbatim it would split the wrong axis of
+        the full-shape clone (wrong values / SDSC abort at multi-core). The
+        numerical failure only manifests when work is split across cores; here
+        (sencores=1) we assert the clone is inserted and the result is correct.
+        Multi-core numerical coverage lives in
         tests/inductor/test_inductor_ops.py (max_sub_broadcast, aminmax,
         softmax)."""
         x = self.rand_device((64, 256))
@@ -471,13 +471,17 @@ class TestCloneAtGraphBoundaries(TestScratchpadUsage):
         torch.compiler.reset()
 
         with ts_inductor_config.patch(lx_planning=True):
-            result, n_ops_with_lx, _ = self._compile_and_inspect(fn, (x,))
+            result, n_ops_with_lx, mem_usages = self._compile_and_inspect(fn, (x,))
 
-        self.assertEqual(
+        self.assertGreater(
             n_ops_with_lx,
             n_ops_no_lx,
-            "Expected no boundary clone for a reduction-fed input, but the op "
-            f"count grew ({n_ops_no_lx} -> {n_ops_with_lx})",
+            "Expected a boundary clone for the reduction-fed input, but the op "
+            f"count did not grow ({n_ops_no_lx} -> {n_ops_with_lx})",
+        )
+        self.assertTrue(
+            any(u["location"] == "LX" for u in mem_usages.values()),
+            "Expected at least one LX-allocated buffer for the reduction input",
         )
         self.assertTrue(
             torch.equal(ref, result),
