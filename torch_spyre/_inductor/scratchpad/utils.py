@@ -162,6 +162,17 @@ def buffer_not_read_in_full(graph: GraphLowering | GraphView, buf_name: str) -> 
     to LX-pin. We are deliberately conservative: an unprovable (symbolic)
     footprint is treated as unsafe, costing a missed optimization but never
     correctness.
+
+    Why a guard and not a codegen fix: the root cause is that the SDSC LX
+    address path (compute_ops._start_addr_data) uses only ``start_address``,
+    dropping the per-access view offset that the HBM path folds in via
+    ``core_idx_to_slice_offset``. It is a codegen gap, not a hardware limit.
+    But folding ``sum(offsets)`` into the LX base only fixes part of it: the
+    view offset interacts with per-core work-slicing (at multi-core the split
+    changes which coordinate is constant vs per-core), so a correct fix must
+    reconcile the view offset with the per-core LX work-slice geometry rather
+    than add a single constant. Until that lands, the guard keeps such buffers
+    in HBM (correct, just unpinned).
     """
     layout = getattr(graph.get_buffer(buf_name), "layout", None)
     if layout is None:
