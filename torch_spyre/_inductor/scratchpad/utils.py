@@ -24,7 +24,7 @@ from torch._inductor.ops_handler import WrapperHandler
 import sympy
 
 from torch_spyre._inductor import config
-from torch_spyre._inductor.pass_utils import _per_core_view_on_buf
+from torch_spyre._inductor.pass_utils import _per_core_view_on_buf, concretize_expr
 
 # Op outputs eligible for LX-pinning. `amax` is the lowered form of
 # `max`; both names are listed to match whichever the IR shows.
@@ -136,6 +136,46 @@ def mem_usage_by_buf(
         }
 
     return mem_usage
+
+
+def buffer_not_read_in_full(graph: GraphLowering | GraphView, buf_name: str) -> bool:
+    """True if any consumer reads less than the whole ``buf_name`` (a sliced,
+    partial, or multi-offset read), or if the footprint can't be proven to
+    cover the full buffer.
+
+    An LX-pinned buffer is addressed by a single base (in SDSC codegen the
+    ``start_address`` is ``layout.allocation["lx"]``); unlike the HBM path, a
+    per-access slice offset is *not* folded into that base, and strided
+    partial reads of a multi-dim buffer mis-address. Both failure modes read
+    less than the full buffer per access:
+
+    - multi-offset: ``x[:, 0:512] + x[:, 512:1024]`` — two half reads that
+      both resolve to the LX base, yielding ``x0 + x0``;
+    - partial slice: ``x[:, :, 0:64]`` — a sub-extent read that mis-addresses
+      the 3D LX buffer.
+
+    Only buffers every consumer reads in full (e.g. ``exp(x) + x``) are safe
+    to LX-pin. We are deliberately conservative: an unprovable (symbolic)
+    footprint is treated as unsafe, costing a missed optimization but never
+    correctness.
+    """
+    layout = getattr(graph.get_buffer(buf_name), "layout", None)
+    if layout is None:
+        return True
+    try:
+        full = math.prod(int(concretize_expr(s)) for s in layout.size)
+    except (TypeError, ValueError):
+        return True
+    for op in graph.operations:
+        for dep in op.get_read_writes().reads:
+            if dep.name != buf_name:
+                continue
+            try:
+                if int(dep.get_numel()) < full:
+                    return True
+            except (TypeError, ValueError):
+                return True
+    return False
 
 
 def get_buffer_users(graph: GraphLowering | GraphView) -> dict[str, list[Operation]]:

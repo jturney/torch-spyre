@@ -545,6 +545,63 @@ class TestCloneAtGraphBoundaries(BaseTestScratchpadUsage):
             torch.equal(ref_z, result_z), "LX output clone changed result z"
         )
 
+    def test_input_read_at_multiple_offsets_is_correct(self):
+        """A graph input read by one op at two distinct offsets must not be
+        LX-pinned.
+
+        An LX-pinned buffer is addressed by a single base (SDSC start_address
+        = allocation["lx"]); per-access slice offsets are not folded into it.
+        Pinning ``x`` for ``x[:, 0:512] + x[:, 512:1024]`` made both reads
+        resolve to the LX base, so the op computed ``x0 + x0`` instead of
+        ``x0 + x1``. The allocator now skips such inputs (they stay in HBM,
+        where multi-offset reads work)."""
+        x = self.rand_device((64, 1024))
+
+        def fn(x):
+            # The fused add reads x at offset 0 and offset 512 -> two distinct
+            # offsets on the same buffer -> ineligible for LX pinning.
+            return x[:, 0:512] + x[:, 512:1024]
+
+        with ts_inductor_config.patch(lx_planning=False):
+            ref, _, _ = self._compile_and_inspect(fn, (x,))
+
+        torch.compiler.reset()
+
+        with ts_inductor_config.patch(lx_planning=True):
+            result, _, _ = self._compile_and_inspect(fn, (x,))
+
+        self.assertTrue(
+            torch.equal(ref, result),
+            "Multi-offset input read produced wrong values under LX planning",
+        )
+
+    def test_input_read_partially_is_correct(self):
+        """A graph input read only over a sub-extent (a slice) must not be
+        LX-pinned.
+
+        Strided partial reads of a multi-dim LX buffer mis-address against the
+        single LX base. Pinning ``x`` for ``add(x[:, :, 0:64].clone(),
+        x[:, :, 0:64])`` produced wrong values; the allocator now leaves such
+        inputs in HBM, where partial reads work."""
+        x = self.rand_device((3, 3, 192))
+
+        def fn(x):
+            s = x[:, :, 0:64]  # partial inner-dim slice -> sub-extent read
+            return torch.add(s.clone(), s)
+
+        with ts_inductor_config.patch(lx_planning=False):
+            ref, _, _ = self._compile_and_inspect(fn, (x,))
+
+        torch.compiler.reset()
+
+        with ts_inductor_config.patch(lx_planning=True):
+            result, _, _ = self._compile_and_inspect(fn, (x,))
+
+        self.assertTrue(
+            torch.equal(ref, result),
+            "Partial input read produced wrong values under LX planning",
+        )
+
 
 # TODO: Remove hard coded core division. This test exists to check for
 # regressions when operating on matmuls. There is likely a better
