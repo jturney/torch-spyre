@@ -54,7 +54,6 @@ from torch_spyre._inductor.scratchpad.utils import (
     OP_OUTPUT_GOOD_FOR_LX_REUSE,
     OP_GOOD_FOR_LX_INPLACE,
     buffer_not_read_in_full,
-    buffer_read_by_reduction,
     clone_at_graph_boundaries,
     mem_usage_by_buf,
     calculate_liveness,
@@ -225,14 +224,12 @@ class ScratchpadAllocator(ABC):
             if _would_produce_lx_back_gap(graph, output_name, uses):
                 self.reject_reasons[output_name] = "lx back gap"
                 continue
-            if output_name in graph_output_names and (
-                buffer_not_read_in_full(graph, output_name)
-                or buffer_read_by_reduction(graph, output_name)
+            if output_name in graph_output_names and buffer_not_read_in_full(
+                graph, output_name
             ):
-                # A pinned graph output is cloned for the HBM return. Skip it if
-                # a consumer reads it partially (sliced / multi-offset -> SDSC
-                # mis-addresses the single-base LX buffer) or via a reduction
-                # (clone split mis-keys, see buffer_read_by_reduction).
+                # A pinned graph output is cloned for the HBM return; if a
+                # consumer reads it partially (sliced / multi-offset), SDSC
+                # mis-addresses the single-base LX buffer. Don't pin it.
                 continue
             buffers.append(
                 LifetimeBoundBuffer(
@@ -262,11 +259,6 @@ class ScratchpadAllocator(ABC):
                     # x[:, :, 0:64]). The clone would be pinned to LX, which
                     # SDSC addresses by a single base, so partial reads
                     # mis-address and produce wrong results.
-                    continue
-                if buffer_read_by_reduction(graph, input_name):
-                    # A reduction consumer's split mis-keys onto the full-shape
-                    # clone (see buffer_read_by_reduction), splitting the wrong
-                    # axis -> wrong values or an SDSC abort at multi-core.
                     continue
                 num_cores = ncores.get(input_name, -1)
                 if num_cores < 0:
