@@ -446,6 +446,44 @@ class TestCloneAtGraphBoundaries(TestScratchpadUsage):
             "Multi-offset input read produced wrong values under LX planning",
         )
 
+    def test_input_feeding_reduction_is_not_cloned(self):
+        """A graph input read by a reduction must not be LX-cloned.
+
+        push_allocation_with_clone copies the first consumer's
+        op_it_space_splits onto the clone; a reduction consumer's splits are
+        keyed to its reduced-shape output and mis-map onto the full-shape
+        clone, splitting the wrong axis (wrong values / SDSC abort at
+        multi-core). The numerical failure only manifests when work is split
+        across cores; here (sencores=1) we assert the guard's decision: no
+        boundary clone is inserted for the reduction-fed input, and the result
+        is correct. Multi-core numerical coverage lives in
+        tests/inductor/test_inductor_ops.py (max_sub_broadcast, aminmax,
+        softmax)."""
+        x = self.rand_device((64, 256))
+
+        def fn(x):
+            # x feeds the max reduction (and the sub) -> reduction consumer.
+            return x - torch.unsqueeze(torch.max(x, dim=1).values, dim=1)
+
+        with ts_inductor_config.patch(lx_planning=False):
+            ref, n_ops_no_lx, _ = self._compile_and_inspect(fn, (x,))
+
+        torch.compiler.reset()
+
+        with ts_inductor_config.patch(lx_planning=True):
+            result, n_ops_with_lx, _ = self._compile_and_inspect(fn, (x,))
+
+        self.assertEqual(
+            n_ops_with_lx,
+            n_ops_no_lx,
+            "Expected no boundary clone for a reduction-fed input, but the op "
+            f"count grew ({n_ops_no_lx} -> {n_ops_with_lx})",
+        )
+        self.assertTrue(
+            torch.equal(ref, result),
+            "Reduction-fed input changed result under LX planning",
+        )
+
     def test_input_read_partially_is_correct(self):
         """A graph input read only over a sub-extent (a slice) must not be
         LX-pinned.

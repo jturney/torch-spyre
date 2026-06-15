@@ -16,7 +16,7 @@
 import math
 from torch._inductor.dependencies import MemoryDep
 from torch._inductor.graph import GraphLowering
-from torch._inductor.ir import Operation
+from torch._inductor.ir import Operation, Reduction
 from torch_spyre._inductor import config
 from torch_spyre._inductor.pass_utils import (
     _per_core_view_on_buf,
@@ -179,6 +179,27 @@ def buffer_not_read_in_full(graph: GraphLowering | GraphView, buf_name: str) -> 
                     return True
             except (TypeError, ValueError):
                 return True
+    return False
+
+
+def buffer_read_by_reduction(graph: GraphLowering | GraphView, buf_name: str) -> bool:
+    """True if any consumer that reads ``buf_name`` wraps a ``Reduction``.
+
+    Step 2b of ``push_allocation_with_clone`` copies the first consumer's
+    ``op_it_space_splits`` onto the inserted clone. Those keys are write-index
+    stride coefficients, which only map to the same physical dimension when the
+    consumer's output shape matches the clone's (== the buffer's) shape. A
+    reduction consumer's output drops the reduced dimension, so the same
+    coefficient key lands on a *different* dim of the full-shape clone -- the
+    clone splits the wrong axis, producing wrong values or an SDSC abort at
+    multi-core. Until that split is re-keyed through the buffer's strides,
+    don't LX-pin buffers feeding a reduction.
+    """
+    for op in graph.operations:
+        if isinstance(getattr(op, "data", None), Reduction) and any(
+            dep.name == buf_name for dep in op.get_read_writes().reads
+        ):
+            return True
     return False
 
 
