@@ -90,6 +90,27 @@ def _canonical_test_names(test_cls):
     return canonical
 
 
+# Delegator test methods in ``TestOps`` whose body simply calls a sibling
+# ``self.test_*()`` by its bare name (e.g. ``test_eq_scalar_constant_zero``
+# -> ``self.test_eq_scalar_zero()``). The LX-planning wrap renames every test
+# with a ``_{suffix}`` suffix, so those bare-name calls raise ``AttributeError``
+# on the wrapped class. They are redundant aliases of canonical tests that are
+# already wrapped, so skip wrapping them entirely. (The skip-lists below cannot
+# cover this because ``TEST_LX_PLANNING_RUN_SKIPS=1`` bypasses them.)
+_DELEGATOR_TESTS = frozenset(
+    {
+        "test_scalar_comparison",
+        "test_eq_scalar_constant_int",
+        "test_eq_scalar_constant_float",
+        "test_eq_scalar_constant_negative",
+        "test_eq_scalar_constant_zero",
+        "test_eq_scalar_constant_multidim",
+        "test_eq_scalar_constant_large_tensor",
+        "test_eq_scalar_vs_tensor_comparison",
+    }
+)
+
+
 def _copy_canonical_tests(
     src_cls, dst_cls, suffix, test_failures, inherited_test_attributes
 ):
@@ -103,6 +124,8 @@ def _copy_canonical_tests(
     )
     for name, value in src_cls.__dict__.items():
         if not name.startswith("test_"):
+            continue
+        if name in _DELEGATOR_TESTS:
             continue
         if keep is not None and name not in keep:
             continue
