@@ -188,13 +188,34 @@ def get_ncores_for_buffers(graph: GraphLowering | GraphView) -> dict[str, int]:
             # its own valid work slice.
             ref_view = None
             mismatch = False
+            writer_cores: list[int] = []
+            reader_cores: list[int] = []
             for op, dep in users:
                 view, flag = _per_core_view_on_buf(op, dep, buf_name)
                 if ref_view is None:
                     ref_view = view
-                if (flag and dep in op.get_read_writes().writes) or (view != ref_view):
+                is_write = dep in op.get_read_writes().writes
+                if (flag and is_write) or (view != ref_view):
                     mismatch = True
                     break
+                (writer_cores if is_write else reader_cores).append(_op_num_cores(op))
+            # Broadcast (un-sliced) buffer coherence: when no work-slice splits
+            # this buffer, every core that reads it needs the full buffer in its
+            # local LX, so the producers must run on at least as many cores as
+            # the consumers. The work-slice views all match here (all empty), so
+            # the geometry check above cannot catch a count mismatch — e.g. a
+            # matmul's K-padded operand written on 1 core but broadcast-read on
+            # N. Such a buffer cannot be coherently LX-pinned; flag it so it
+            # falls back to HBM (where the broadcast read is globally correct).
+            if (
+                not mismatch
+                and ref_view is not None
+                and not ref_view.work_slice_dims
+                and writer_cores
+                and reader_cores
+                and max(writer_cores) < max(reader_cores)
+            ):
+                mismatch = True
             num_cores = -1 if mismatch else max(_op_num_cores(op) for op, _ in users)
         elif using_multicore:
             num_cores = _op_num_cores(users[0][0])
