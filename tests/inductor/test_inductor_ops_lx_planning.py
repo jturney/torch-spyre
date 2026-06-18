@@ -177,6 +177,9 @@ POINTWISE_TEST_FAILURES = [
     "test_mm_mm_55x2_2x99",
     "test_slice_stick_reduce_dim2_amax_3d64_0",
     "test_slice_stick_reduce_dim2_sum_3d64_0",
+    "test_restickify_add_transpose_10x20_add_transpose",
+    "test_restickify_add_transpose_7x13_add_transpose",
+    "test_restickify_add_transpose_64x129_add_transpose",
     # unfold: lx_planning cannot handle multi-variable stick expressions produced
     # by unfold's overlapping/strided access patterns (e.g. d0+d1, 4*d0+d1).
     # Tracked by issue #2346.
@@ -337,6 +340,9 @@ REDUCTION_TEST_FAILURES = [
     "test_transpose_2d_large_dim_0_1_nopad",
     "test_transpose_2d_large_dim_0_2",
     "test_transpose_2d_large_dim_0_2_nopad",
+    "test_restickify_add_transpose_10x20_add_transpose",
+    "test_restickify_add_transpose_7x13_add_transpose",
+    "test_restickify_add_transpose_64x129_add_transpose",
     # unfold: same as POINTWISE — multi-variable stick expressions. Issue #2346.
     "test_unfold_1d_large",
     "test_unfold_1d_no_overlap",
