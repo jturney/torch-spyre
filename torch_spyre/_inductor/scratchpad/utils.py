@@ -14,6 +14,7 @@
 
 
 import math
+import sympy
 from torch._inductor.dependencies import MemoryDep
 from torch._inductor.graph import GraphLowering
 from torch._inductor.ir import Operation
@@ -124,6 +125,52 @@ def mem_usage_by_buf(graph: GraphLowering | GraphView) -> dict:
         }
 
     return mem_usage
+
+
+def buffers_read_with_substick_offset(
+    graph: GraphLowering | GraphView,
+) -> set[str]:
+    """Buffer names that some op reads at a within-stick (sub-stick) offset.
+
+    A slice that starts partway into a stick — e.g. an inner-dim ``[32:96]``
+    on a 64-element fp16 stick — produces a constant read-index offset that is
+    NOT a multiple of ``elems_per_stick``. Outer-dim slices and stick-aligned
+    inner slices contribute whole-stick multiples, so they do not appear here.
+
+    Such reads are miscompiled when the source buffer is LX-pinned:
+    ``codegen/compute_ops.py::_start_addr_data`` returns the bare
+    ``start_address`` for LX tensors, dropping the slice offset that the
+    HBM/pool path applies via ``core_idx_to_slice_offset``; and the full-tensor
+    offset does not map onto the per-core LX tile layout. Callers use this to
+    keep the source buffer off LX so it falls back to the correct pool path.
+
+    This is a targeted correctness guard for the sub-stick signature only; a
+    general fix for LX slice addressing is tracked separately.
+    """
+    flagged: set[str] = set()
+    for op in graph.operations:
+        rw = op.get_read_writes()
+        for dep in rw.reads:
+            if dep.name in flagged:
+                continue
+            index = getattr(dep, "index", None)
+            if not isinstance(index, sympy.Expr):
+                continue
+            const = index.xreplace({s: sympy.Integer(0) for s in index.free_symbols})
+            try:
+                const_int = int(const)
+            except (TypeError, ValueError):
+                continue
+            if const_int == 0:
+                continue
+            buf = graph.try_get_buffer(dep.name)
+            dev_layout = getattr(getattr(buf, "layout", None), "device_layout", None)
+            if dev_layout is None:
+                continue
+            elems_per_stick = dev_layout.device_dtype.elems_per_stick()
+            if const_int % elems_per_stick != 0:
+                flagged.add(dep.name)
+    return flagged
 
 
 def get_buffer_users(graph: GraphLowering | GraphView) -> dict[str, list[Operation]]:

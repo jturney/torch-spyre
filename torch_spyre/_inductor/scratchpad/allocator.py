@@ -54,6 +54,7 @@ from torch_spyre._inductor.scratchpad.utils import (
     calculate_liveness,
     get_ncores_for_buffers,
     get_buffer_users,
+    buffers_read_with_substick_offset,
     GraphView,
 )
 from torch_spyre._inductor.scratchpad.graph_editor import GraphEditor
@@ -129,6 +130,13 @@ class ScratchpadAllocator(ABC):
         drop_list.update(
             [key for key, mismatch in core_div_mismatch.items() if mismatch == -1]
         )
+
+        # filter out buffers read at a within-stick slice offset: LX-pinning
+        # drops the slice offset for such reads (see compute_ops._start_addr_data)
+        # and the offset does not map onto the per-core LX tile layout, so the
+        # data is read from the wrong place. Keep them off LX (they fall to the
+        # correct pool path). Overrides allow_all_ops_in_lx_planning by design.
+        drop_list.update(buffers_read_with_substick_offset(graph))
 
         if not clone_at_graph_boundaries():
             # Without clone support, graph outputs cannot be LX-pinned: the caller

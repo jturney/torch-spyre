@@ -417,5 +417,57 @@ class TestCloneAtGraphBoundaries(TestScratchpadUsage):
         )
 
 
+class TestSubStickSliceGuard(TestScratchpadUsage):
+    """A buffer read at a within-stick slice offset must not be LX-pinned.
+
+    A slice that starts partway into a stick (inner-dim ``[32:96]`` on a
+    64-element fp16 stick) is miscompiled when its source buffer is LX-pinned:
+    ``codegen/compute_ops.py::_start_addr_data`` drops the slice offset for LX
+    tensors, and the full-tensor offset does not map onto the per-core LX tile
+    layout, so the read returns wrong data (~94% mismatch). The allocator guard
+    (``buffers_read_with_substick_offset``) keeps such source buffers off LX so
+    they fall to the correct pool path. Removing the guard regresses this test
+    to a large numerical mismatch.
+    """
+
+    def test_substick_inner_slice_not_pinned_to_lx(self):
+        # Shape with both leading dims large so the chained ops divide cleanly
+        # across cores (no core-division mismatch) — the case that would
+        # otherwise LX-pin the sliced source buffer.
+        x = self.rand_device((128, 192, 256))
+
+        def fn(x):
+            # Inner-dim slice starting at element 32 (mid 64-element stick),
+            # then a chained pointwise so the sliced result feeds another op.
+            y = x[:, :, 32:96].clone()
+            return y + y
+
+        cpu_result = fn(x.to("cpu"))
+
+        # allow_all_ops_in_lx_planning makes the chained intermediate
+        # LX-eligible; sencores=32 gives the consistent multi-core division
+        # that would otherwise pin the sliced source buffer to LX.
+        with ts_inductor_config.patch(lx_planning=True):
+            with ts_inductor_config.patch(allow_all_ops_in_lx_planning=True):
+                with ts_inductor_config.patch(sencores=32):
+                    device_result, mem_usages = self.compile_and_collect_mem_usage(
+                        fn, (x,)
+                    )
+
+        # The scenario must actually exercise LX-pinning, otherwise the test
+        # would pass trivially without covering the guard.
+        self.assertTrue(
+            any(u["location"] == "LX" for u in mem_usages.values()),
+            "Expected at least one LX-allocated buffer in this scenario",
+        )
+        torch.testing.assert_close(
+            device_result,
+            cpu_result,
+            atol=0.1,
+            rtol=0.1,
+            msg="sub-stick sliced read miscompiled — is the LX-pinning guard present?",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
