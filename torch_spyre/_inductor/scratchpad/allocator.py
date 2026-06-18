@@ -189,6 +189,21 @@ class ScratchpadAllocator(ABC):
             [key for key, mismatch in core_div_mismatch.items() if mismatch == -1]
         )
 
+        # filter out intermediates read partially (sliced / multi-offset): the
+        # single-base LX path mis-addresses such reads (see
+        # buffer_not_read_in_full / compute_ops._start_addr_data), e.g. an
+        # inner-dim slice x[:, :, 32:96] feeding a chained op. _build_bound_buffers
+        # applies the same guard to graph input/output clones; this covers the
+        # intermediate buffers. Overrides allow_all_ops_in_lx_planning by design.
+        # Only check ops still eligible above: ops already dropped include
+        # non-ComputedBuffer outputs (e.g. multi-output) whose layouts have no
+        # size for buffer_not_read_in_full to inspect.
+        drop_list.update(
+            op.name
+            for op in graph.operations
+            if op.name not in drop_list and buffer_not_read_in_full(graph, op.name)
+        )
+
         if not clone_at_graph_boundaries():
             # Without clone support, graph outputs cannot be LX-pinned: the caller
             # holds an HBM reference and there is no clone to redirect it to.
