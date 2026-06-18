@@ -171,10 +171,13 @@ def buffer_not_read_in_full(graph: GraphLowering | GraphView, buf_name: str) -> 
     in HBM (correct, just unpinned).
     """
     layout = getattr(graph.get_buffer(buf_name), "layout", None)
-    if layout is None:
+    # No layout, or a layout without a concrete size (e.g. MultiOutputLayout,
+    # NoneLayout): we cannot prove a full read, so treat as unsafe to pin.
+    size = getattr(layout, "size", None)
+    if size is None:
         return True
     try:
-        full = math.prod(int(concretize_expr(s)) for s in layout.size)
+        full = math.prod(int(concretize_expr(s)) for s in size)
     except (TypeError, ValueError):
         return True
     for op in graph.operations:

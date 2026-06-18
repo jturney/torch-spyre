@@ -820,5 +820,53 @@ class CoOptAllocatorIntegrationTests(BaseTestScratchpadUsage):
         )
 
 
+class TestIntermediatePartialReadNotPinned(BaseTestScratchpadUsage):
+    """An *intermediate* buffer read partially (sliced) must not be LX-pinned.
+
+    Companion to ``TestCloneAtGraphBoundaries``, which guards graph
+    input/output clones. ``_filter_ops`` applies the same
+    ``buffer_not_read_in_full`` guard to intermediate buffers: a buffer that is
+    produced in full and then read over a sub-extent (an inner-dim slice that
+    feeds a chained op) would be LX-pinned and mis-addressed by the single-base
+    LX path. Without the intermediate guard this regresses to a large
+    numerical mismatch (~94%).
+    """
+
+    def test_sliced_intermediate_is_correct(self):
+        # Both leading dims large so the chained ops divide cleanly across
+        # cores (no core-division mismatch) -- the case that would otherwise
+        # LX-pin the sliced intermediate. allow_all_ops_in_lx_planning makes
+        # the intermediate LX-eligible; sencores=32 gives the multi-core split.
+        x = self.rand_device((128, 192, 256))
+
+        def fn(x):
+            t = torch.exp(x)  # full intermediate, produced once
+            s = t[:, :, 32:96]  # sub-stick partial read of the intermediate
+            return s.clone() + s
+
+        cpu_result = fn(x.to("cpu"))
+
+        with ts_inductor_config.patch(
+            lx_planning=True,
+            allow_all_ops_in_lx_planning=True,
+            sencores=32,
+        ):
+            result, mem_usages = self.compile_and_collect_mem_usage(fn, (x,))
+
+        # The scenario must still exercise LX-pinning, else it would pass
+        # trivially without covering the guard.
+        self.assertTrue(
+            any(u["location"] == "LX" for u in mem_usages.values()),
+            "Expected at least one LX-allocated buffer in this scenario",
+        )
+        torch.testing.assert_close(
+            result,
+            cpu_result,
+            atol=0.1,
+            rtol=0.1,
+            msg="sliced intermediate miscompiled -- is the _filter_ops guard present?",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
