@@ -90,8 +90,11 @@ class TestScratchpadUsage(unittest.TestCase):
         torch.compiler.reset()
 
     def rand_device(self, shape: Sequence[int]):
-        result = torch.rand(shape, dtype=torch.float16, device="spyre")
-        return result
+        # Generate on CPU (where torch.manual_seed is honoured) and move to
+        # device. torch.rand(device="spyre") draws from the Spyre device RNG,
+        # which manual_seed does not reset, giving non-deterministic inputs that
+        # can intermittently mask data-dependent correctness bugs.
+        return torch.rand(shape, dtype=torch.float16).to("spyre")
 
     @contextmanager
     def pre_scheduling_iterating_pass(
