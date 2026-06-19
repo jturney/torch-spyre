@@ -18,7 +18,7 @@ from torch._inductor.dependencies import MemoryDep
 from torch._inductor.graph import GraphLowering
 from torch._inductor.ir import Operation
 from torch_spyre._inductor import config
-from torch_spyre._inductor.pass_utils import _per_core_view_on_buf
+from torch_spyre._inductor.pass_utils import _is_matmul_op, _per_core_view_on_buf
 
 # Op outputs eligible for LX-pinning. `amax` is the lowered form of
 # `max`; both names are listed to match whichever the IR shows.
@@ -195,7 +195,17 @@ def get_ncores_for_buffers(graph: GraphLowering | GraphView) -> dict[str, int]:
                 if ref_view is None:
                     ref_view = view
                 is_write = dep in op.get_read_writes().writes
-                if (flag and is_write) or (view != ref_view):
+                # A matmul output split across cores on more than one device dim
+                # (e.g. M-split x N-stick-split, op_it_space_splits ({99:11, 1:2}))
+                # cannot be coherently LX-pinned: the SDSC carries only the
+                # primary split, so a consumer reads per-core LX holding only a
+                # fragment of the output (wholesale-wrong, ~35%). Single-dim
+                # splits are fine — e.g. a matmul-accumulate's output is split on
+                # M only (K is the reduction), so accum-in-LX is unaffected.
+                matmul_multidim_split = (
+                    is_write and _is_matmul_op(op) and len(view.work_slice_dims) > 1
+                )
+                if (flag and is_write) or (view != ref_view) or matmul_multidim_split:
                     mismatch = True
                     break
                 (writer_cores if is_write else reader_cores).append(_op_num_cores(op))
