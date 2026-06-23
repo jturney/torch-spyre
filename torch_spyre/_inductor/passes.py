@@ -65,6 +65,7 @@ from .work_division import (
 from .pass_utils import apply_splits_from_index_coeff, iteration_space_from_op
 from .scratchpad.allocator import (
     StrategyBCoOptimizingAllocator,
+    IlpCoOptimizingAllocator,
     scratchpad_planning,
 )
 from .fusion import spyre_fuse_nodes
@@ -289,9 +290,19 @@ def _distribute_work(graph: GraphLowering) -> None:
 def _maybe_scratchpad_planning(graph: GraphLowering) -> None:
     if not config.lx_planning:
         return
-    allocator = (
-        StrategyBCoOptimizingAllocator() if config.co_optimizing_lx_planning else None
+    # Pick the allocator by solver: the ILP solver runs its own joint
+    # core-division solve, so layout_solver == "ilp" uses IlpCoOptimizingAllocator
+    # regardless of the co-opt flag. StrategyB is the co-optimizing allocator for
+    # the gap-based (greedy/bestfit/firstfit) solvers and is used only when the
+    # co-opt flag is set and the solver is not ILP; otherwise allocator stays None
+    # (the DefaultAllocator placement-only path).
+    allocator: Optional[IlpCoOptimizingAllocator | StrategyBCoOptimizingAllocator] = (
+        None
     )
+    if config.layout_solver == "ilp":
+        allocator = IlpCoOptimizingAllocator()
+    elif config.co_optimizing_lx_planning:
+        allocator = StrategyBCoOptimizingAllocator()
     scratchpad_planning(graph, allocator=allocator)
 
 

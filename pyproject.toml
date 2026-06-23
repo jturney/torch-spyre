@@ -33,7 +33,10 @@ requires-python = ">=3.11"
 dynamic = ["version"]
 
 [project.optional-dependencies]
-build = [ # no-isolation build 
+ilp = [ # ILP-based LX layout solver (layout_solver='ilp' / LAYOUT_SOLVER=ilp)
+    "z3-solver",
+]
+build = [ # no-isolation build
     # any change here should be reflected in the build system above
     "build",  # only required to build torch_sendnn
     "cmake>=3.27,<4.0.0",

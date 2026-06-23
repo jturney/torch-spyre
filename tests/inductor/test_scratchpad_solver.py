@@ -14,11 +14,26 @@
 
 """Tests for layout solvers"""
 
+import unittest
 from unittest import TestCase
 from torch_spyre._inductor.scratchpad.plan_solver import (
+    CoreDivision,
     GreedyLayoutSolver,
     LifetimeBoundBuffer,
 )
+
+from torch_spyre._inductor.scratchpad.ilp_solver import (
+    CoreDivisionBuffer,
+    ILPLayoutSolver,
+)
+
+try:
+    import z3  # noqa: F401
+
+    _HAS_Z3 = True
+except ImportError:
+    _HAS_Z3 = False
+
 from torch_spyre._inductor.scratchpad.firstfit_bestfit_solver import (
     BestFitLayoutSolver,
     FirstFitLayoutSolver,
@@ -362,6 +377,155 @@ class TestBestFitLayoutSolver(ScoreOrderingTests, BaseLayoutSolverTests, TestCas
         result = self.solver_class(120, 1).plan_layout(_two_gap_buffers())
         x_addr = next(b.address for b in result if b.name == "x")
         self.assertEqual(x_addr, 100)
+
+
+@unittest.skipUnless(_HAS_Z3, "z3-solver not installed")
+class TestIlpJointDivision(TestCase):
+    """Joint core-division solve: the ILP picks each buffer's division from its
+    candidate list while keeping producer/consumer slicing consistent."""
+
+    @staticmethod
+    def _divs():
+        # Two valid loop divisions: split output stride-256 axis four ways
+        # (per-core footprint = total / 4), or keep the buffer whole.
+        return [
+            CoreDivision(output_splits={256: 4}),
+            CoreDivision(),
+        ]
+
+    @staticmethod
+    def _whole():
+        # A single whole-buffer division: per-core footprint == total size, so
+        # no split can relieve capacity pressure and in-place reuse is actually
+        # exercised (a /N split would shrink every footprint enough that the
+        # merge -- a no-overlap relaxation used only when needed to fit -- would
+        # never fire).
+        return [CoreDivision()]
+
+    def test_layout_with_inplace(self):
+        # A producer->consumer chain (A->B->...->TERMINAL) gives every buffer a
+        # consumer edge so it may reside; whole-only divisions keep footprint ==
+        # size so capacity pressure forces the in-place merge to fire. P reuses
+        # its in-place parent G's storage. The chain tail TERMINAL is
+        # consumer-less and is correctly force-spilled by the no-consumer
+        # residency gate, so it is the one buffer left without an address.
+        # cd_parents / cd_parent_matches are set by the chain loop below, so only
+        # the fields that differ from the defaults are passed here: every buffer
+        # carries the whole-only division, and P declares its in-place parents.
+        buffers = [
+            CoreDivisionBuffer("A", 60, [0, 2], core_divisions=self._whole()),
+            CoreDivisionBuffer("B", 30, [1, 4], core_divisions=self._whole()),
+            CoreDivisionBuffer("C", 30, [2, 13], core_divisions=self._whole()),
+            CoreDivisionBuffer("D", 30, [3, 4], core_divisions=self._whole()),
+            CoreDivisionBuffer("E", 30, [4, 5], core_divisions=self._whole()),
+            CoreDivisionBuffer("F", 60, [5, 6], core_divisions=self._whole()),
+            CoreDivisionBuffer("G", 30, [6, 15], core_divisions=self._whole()),
+            CoreDivisionBuffer("H", 30, [7, 8], core_divisions=self._whole()),
+            CoreDivisionBuffer("I", 30, [8, 9], core_divisions=self._whole()),
+            CoreDivisionBuffer("J", 15, [9, 16], core_divisions=self._whole()),
+            CoreDivisionBuffer("K", 15, [10, 12], core_divisions=self._whole()),
+            CoreDivisionBuffer("L", 15, [11, 12], core_divisions=self._whole()),
+            CoreDivisionBuffer("M", 15, [12, 13], core_divisions=self._whole()),
+            CoreDivisionBuffer("N", 30, [13, 15], core_divisions=self._whole()),
+            CoreDivisionBuffer("O", 45, [14, 15], core_divisions=self._whole()),
+            CoreDivisionBuffer(
+                "P",
+                30,
+                [15, 16],
+                in_place_parents=["G", "N"],
+                core_divisions=self._whole(),
+            ),
+            CoreDivisionBuffer("Q", 75, [16, 17], core_divisions=self._whole()),
+            CoreDivisionBuffer("TERMINAL", 75, [17, 18], core_divisions=self._whole()),
+        ]
+        for i in range(1, len(buffers)):
+            buffers[i].cd_parent_matches = {buffers[i - 1].name: [(0, 0)]}
+            buffers[i].cd_parents = [buffers[i - 1].name]
+        buffers_by_name = {b.name: b for b in buffers}
+        # The in-place merge gate matches on cd_parent_matches, not on the linear
+        # cd_parents chain, so P's in-place parents G/N need explicit pairs too.
+        buffers_by_name["P"].cd_parent_matches.update({"G": [(0, 0)], "N": [(0, 0)]})
+
+        results = ILPLayoutSolver(size=120, alignment=1).plan_layout(buffers)
+        results_by_name = {b.name: b for b in results}
+        # Every buffer is placed except the consumer-less chain tail TERMINAL.
+        self.assertTrue(all(b.address is not None for b in results[:-1]))
+        self.assertIsNone(results_by_name["TERMINAL"].address)
+        # P reuses its in-place parent G's storage.
+        self.assertEqual(results_by_name["P"].address, results_by_name["G"].address)
+
+    def test_unset_core_divisions_raises(self):
+        # The solver no longer has a placement-only fallback for unset divisions:
+        # every buffer must carry at least one enumerated core division (the real
+        # allocator always supplies at least the whole-buffer division), so an
+        # undivided buffer is a usage error caught up front.
+        plain = [
+            CoreDivisionBuffer("x", 60, [0, 1]),
+            CoreDivisionBuffer("y", 60, [1, 2]),
+        ]
+        with self.assertRaises(AssertionError):
+            ILPLayoutSolver(size=120, alignment=1).plan_layout(plain)
+
+    def test_picks_matching_division_to_fit(self):
+        # Producer P (total 400) feeds consumer C (total 400); both overlap in
+        # time so the whole (partition 1) division can't fit in 256. The only
+        # feasible plan splits both /4 (per-core 100 each) AND picks the same
+        # slicing signature so the shared buffer is locality-clean.
+        P = CoreDivisionBuffer("P", 400, [0, 1], core_divisions=self._divs())
+        C = CoreDivisionBuffer(
+            "C",
+            400,
+            [1, 3],
+            core_divisions=self._divs(),
+            cd_parents=["P"],
+            cd_parent_matches={"P": [(0, 0), (1, 1)]},
+        )
+        # Give C a downstream consumer so it isn't force-spilled by no_consumer.
+        D = CoreDivisionBuffer(
+            "D",
+            100,
+            [3, 4],
+            core_divisions=self._divs(),
+            cd_parents=["C"],
+            cd_parent_matches={"C": [(0, 0), (1, 1)]},
+        )
+        result = {
+            b.name: b
+            for b in ILPLayoutSolver(size=256, alignment=1).plan_layout([P, C, D])
+        }
+
+        self.assertIsNotNone(result["P"].address)
+        self.assertIsNotNone(result["C"].address)
+        # P resident => its division matches a consumer (C); both chose the /4
+        # clean split, so their signatures agree.
+        p_cd = result["P"].core_divisions[result["P"].chosen_division]
+        c_cd = result["C"].core_divisions[result["C"].chosen_division]
+        self.assertEqual(p_cd.signature_key(), c_cd.signature_key())
+        self.assertEqual(p_cd.output_partition, 4)
+
+    def test_no_consumer_division_buffer_is_spilled(self):
+        # A buffer that carries divisions but has no local consumer edge can
+        # never match anything, so it is force-spilled even when it would fit.
+        leaf = CoreDivisionBuffer("leaf", 40, [0, 1], core_divisions=self._divs())
+        result = ILPLayoutSolver(size=256, alignment=1).plan_layout([leaf])
+        self.assertIsNone(result[0].address)
+
+    def test_oversized_min_footprint_is_spilled(self):
+        # Even the smallest candidate footprint (total/4 = 250) exceeds the
+        # tiny capacity, so the buffer is force-spilled.
+        P = CoreDivisionBuffer("P", 1000, [0, 1], core_divisions=self._divs())
+        C = CoreDivisionBuffer(
+            "C",
+            1000,
+            [1, 2],
+            core_divisions=self._divs(),
+            cd_parents=["P"],
+        )
+        result = {
+            b.name: b
+            for b in ILPLayoutSolver(size=200, alignment=1).plan_layout([P, C])
+        }
+        self.assertIsNone(result["P"].address)
 
 
 class TestGreedyLayoutSolver(BaseLayoutSolverTests, TestCase):
