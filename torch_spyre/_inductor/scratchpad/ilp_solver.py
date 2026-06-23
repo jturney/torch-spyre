@@ -14,13 +14,12 @@
 
 from __future__ import annotations
 
-import os
 import logging
 import time
 from dataclasses import dataclass, field, replace
 from typing import Any, Optional, TYPE_CHECKING
-
 import numpy as np
+import math
 
 
 if TYPE_CHECKING:
@@ -29,20 +28,10 @@ else:
     try:
         import z3
 
-        num_cores = os.cpu_count() or 1
-
-        # Use all cores for SAT/QF_BV and for general SMT (Integer/Real/...).
-        z3.set_param("sat.threads", num_cores)
-        z3.set_param("smt.threads", num_cores)
-        # Cube-and-Conquer portfolio solving (needs warm-up):
-        # z3.set_param('parallel.enable', True)
-        # z3.set_param('parallel.threads.max', num_cores)
-
     except ImportError:  # pragma: no cover - exercised only when z3 is absent
         z3 = None
 
 from torch_spyre._inductor.scratchpad.plan_solver import (
-    CoreDivision,
     LifetimeBoundBuffer,
     MemoryPlanSolver,
     _assert_in_place_relationships,
@@ -51,6 +40,49 @@ from torch_spyre._inductor.scratchpad.plan_solver import (
 __all__ = ["CoreDivisionBuffer", "ILPLayoutSolver"]
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class CoreDivision:
+    """One permissible core-division of a buffer's producing op.
+
+    ``output_splits`` / ``reduction_splits`` are the stride/coeff-keyed encoding
+    produced by :func:`pass_utils.splits_by_index_coeff` -- exactly the shape
+    stored in ``op.op_it_space_splits``. ``ILPLayoutSolver`` uses these to size
+    the buffer (per-core footprint = total / ``output_partition``).
+    """
+
+    output_splits: dict[int, int] = field(default_factory=dict)
+    reduction_splits: dict[int, int] = field(default_factory=dict)
+
+    @property
+    def cores_used(self) -> int:
+        return math.prod(self.output_splits.values()) * math.prod(
+            self.reduction_splits.values()
+        )
+
+    @property
+    def is_clean(self) -> bool:
+        """True when no reduction axis is split, so the output is fully sliced
+        across cores (no per-core partial sums)."""
+        return not self.reduction_splits
+
+    @property
+    def output_partition(self) -> int:
+        """How many cores the output buffer is sliced across."""
+        return math.prod(self.output_splits.values())
+
+    def signature_key(self):
+        """Per-core slicing signature, or ``None`` for a reduction-split division
+        (a ``None`` never compares equal, so partial-reduction divisions never
+        match)."""
+        return tuple(sorted(self.output_splits.items())) if self.is_clean else None
+
+    @property
+    def label(self) -> str:
+        out = ",".join(f"s{s}/{f}" for s, f in sorted(self.output_splits.items()))
+        red = ",".join(f"~s{s}/{f}" for s, f in sorted(self.reduction_splits.items()))
+        return " ".join(p for p in (out, red) if p) or "whole"
 
 
 @dataclass

@@ -42,7 +42,6 @@ from torch_spyre._inductor.pass_utils import (
 from torch_spyre._inductor.work_division import enumerate_work_division_candidates
 from torch_spyre._inductor.errors import Unsupported
 from torch_spyre._inductor.scratchpad.plan_solver import (
-    CoreDivision,
     GreedyLayoutSolver,
     LifetimeBoundBuffer,
     MemoryPlanSolver,
@@ -52,6 +51,7 @@ from torch_spyre._inductor.scratchpad.firstfit_bestfit_solver import (
     FirstFitLayoutSolver,
 )
 from torch_spyre._inductor.scratchpad.ilp_solver import (
+    CoreDivision,
     CoreDivisionBuffer,
     ILPLayoutSolver,
 )

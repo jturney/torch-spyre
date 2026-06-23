@@ -21,49 +21,6 @@ import math
 
 
 @dataclass
-class CoreDivision:
-    """One permissible core-division of a buffer's producing op.
-
-    ``output_splits`` / ``reduction_splits`` are the stride/coeff-keyed encoding
-    produced by :func:`pass_utils.splits_by_index_coeff` -- exactly the shape
-    stored in ``op.op_it_space_splits``. ``ILPLayoutSolver`` uses these to size
-    the buffer (per-core footprint = total / ``output_partition``).
-    """
-
-    output_splits: dict[int, int] = field(default_factory=dict)
-    reduction_splits: dict[int, int] = field(default_factory=dict)
-
-    @property
-    def cores_used(self) -> int:
-        return math.prod(self.output_splits.values()) * math.prod(
-            self.reduction_splits.values()
-        )
-
-    @property
-    def is_clean(self) -> bool:
-        """True when no reduction axis is split, so the output is fully sliced
-        across cores (no per-core partial sums)."""
-        return not self.reduction_splits
-
-    @property
-    def output_partition(self) -> int:
-        """How many cores the output buffer is sliced across."""
-        return math.prod(self.output_splits.values())
-
-    def signature_key(self):
-        """Per-core slicing signature, or ``None`` for a reduction-split division
-        (a ``None`` never compares equal, so partial-reduction divisions never
-        match)."""
-        return tuple(sorted(self.output_splits.items())) if self.is_clean else None
-
-    @property
-    def label(self) -> str:
-        out = ",".join(f"s{s}/{f}" for s, f in sorted(self.output_splits.items()))
-        red = ",".join(f"~s{s}/{f}" for s, f in sorted(self.reduction_splits.items()))
-        return " ".join(p for p in (out, red) if p) or "whole"
-
-
-@dataclass
 class LifetimeBoundBuffer:
     """
     Defines the data fields required for a plan solver.

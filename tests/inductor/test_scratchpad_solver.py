@@ -17,12 +17,12 @@
 import unittest
 from unittest import TestCase
 from torch_spyre._inductor.scratchpad.plan_solver import (
-    CoreDivision,
     GreedyLayoutSolver,
     LifetimeBoundBuffer,
 )
 
 from torch_spyre._inductor.scratchpad.ilp_solver import (
+    CoreDivision,
     CoreDivisionBuffer,
     ILPLayoutSolver,
 )
