@@ -573,7 +573,7 @@ class TestIntermediatePartialReadNotPinned(TestScratchpadUsage):
 class TestIlpAllocatorIntegration(TestScratchpadUsage):
     """Real-graph coverage for IlpCoOptimizingAllocator.
     Patching layout_solver="ilp" routes _maybe_scratchpad_planning to
-    IlpCoOptimizingAllocator, puts a compiled graph through the 
+    IlpCoOptimizingAllocator, puts a compiled graph through the
     allocator's translation layer (_division_map /
     _enumerate_core_divisions / _cd_parent_matches / _build_cd_bound_buffers /
     _residency_by_buf) and _commit_divisions.
@@ -629,6 +629,7 @@ class TestIlpAllocatorIntegration(TestScratchpadUsage):
             any(cores(s) > 1 for s in splits.values()),
             f"_commit_divisions never committed a multi-core split: {splits}",
         )
+
 
 if __name__ == "__main__":
     unittest.main()
