@@ -29,6 +29,13 @@ from torch_spyre._inductor.passes import CustomPreSchedulingPasses
 from torch_spyre._inductor import passes
 from torch_spyre._inductor import config as ts_inductor_config
 
+try:
+    import z3  # noqa: F401
+
+    _HAS_Z3 = True
+except ImportError:
+    _HAS_Z3 = False
+
 
 Ts = TypeVarTuple("Ts")
 
@@ -561,6 +568,67 @@ class TestIntermediatePartialReadNotPinned(TestScratchpadUsage):
             msg="sliced intermediate miscompiled — is the _filter_ops guard present?",
         )
 
+
+@unittest.skipUnless(_HAS_Z3, "z3-solver not installed")
+class TestIlpAllocatorIntegration(TestScratchpadUsage):
+    """Real-graph coverage for IlpCoOptimizingAllocator.
+    Patching layout_solver="ilp" routes _maybe_scratchpad_planning to
+    IlpCoOptimizingAllocator, puts a compiled graph through the 
+    allocator's translation layer (_division_map /
+    _enumerate_core_divisions / _cd_parent_matches / _build_cd_bound_buffers /
+    _residency_by_buf) and _commit_divisions.
+    """
+
+    def test_pointwise_reduction_chain_ilp(self):
+        # Pointwise producer -> reduction consumer: exercises both branches of
+        # _enumerate_core_divisions and a real producer->consumer match edge.
+        def model(a, b):
+            return (a + b).sum(dim=0, keepdim=True)
+
+        a = self.rand_device((512, 1024))
+        b = self.rand_device((512, 1024))
+        cpu_result = model(a.to("cpu"), b.to("cpu"))
+
+        mem_usages: dict[str, str] = {}
+        splits: dict[str, tuple] = {}
+
+        def visitor(graph: GraphLowering) -> None:
+            for op in graph.operations:
+                layout = graph.get_buffer(op.name).get_layout()
+                allocation = getattr(layout, "allocation", {})
+                mem_usages[op.name] = "LX" if "lx" in allocation else "HBM"
+                splits[op.name] = getattr(op, "op_it_space_splits", ({}, {}))
+
+        with ts_inductor_config.patch(sencores=32):
+            with ts_inductor_config.patch(layout_solver="ilp"):
+                with ts_inductor_config.patch(lx_planning=True):
+                    with self.pre_scheduling_iterating_pass(visitor):
+                        compiled = torch.compile(model, fullgraph=True)
+                        device_result = compiled(a, b).to("cpu")
+
+        # 1. Correctness end-to-end through the glue.
+        torch.testing.assert_close(
+            device_result,
+            cpu_result,
+            atol=0.1,
+            rtol=0.1,
+            msg="ilp-allocated result diverged from CPU",
+        )
+        # 2. Residency: rules out an all-spilled degenerate plan.
+        self.assertTrue(
+            any(loc == "LX" for loc in mem_usages.values()),
+            f"expected >=1 LX buffer under ilp, got {mem_usages}",
+        )
+
+        # 3. _commit_divisions wrote a multi-core split onto at least one op.
+        def cores(s):
+            out, red = s
+            return math.prod(out.values() or [1]) * math.prod(red.values() or [1])
+
+        self.assertTrue(
+            any(cores(s) > 1 for s in splits.values()),
+            f"_commit_divisions never committed a multi-core split: {splits}",
+        )
 
 if __name__ == "__main__":
     unittest.main()
