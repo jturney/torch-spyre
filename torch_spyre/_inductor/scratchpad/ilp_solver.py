@@ -151,13 +151,15 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         _assert_core_divisions_enumerated(buffers)
 
         # Solve on copies so we never mutate the caller's buffers.
-        working = [
-            replace(
-                b,
-                size=int(np.ceil(b.size / self.alignment)),
+        working = {
+            b.name: _CoreDivisionBufferWithVars(
+                replace(
+                    b,
+                    size=int(np.ceil(b.size / self.alignment)),
+                )
             )
             for b in buffers
-        ]
+        }
 
         offsets, spilled, chosen_div = self._run(working)
         offsets = {k: v * self.alignment for k, v in offsets.items()}
@@ -169,14 +171,14 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
 
     def _run(
         self,
-        tensors: list[CoreDivisionBuffer],
+        tensors: dict[str, _CoreDivisionBufferWithVars],
     ) -> tuple[dict[str, int], set[str], dict[str, int]]:
         opt = z3.Solver()
-        bufs = self._add_buffer_vars(opt, tensors)
-        self._add_inplace_relaxation(opt, bufs)
-        forced = self._add_core_division(opt, bufs)
-        model = self._search(opt, bufs, forced)
-        return self._extract(model, bufs)
+        self._add_buffer_vars(opt, tensors)
+        self._add_inplace_relaxation(opt, tensors)
+        forced = self._add_core_division(opt, tensors)
+        model = self._search(opt, tensors, forced)
+        return self._extract(model, tensors)
 
     @staticmethod
     def _apply_no_overlap_constraint(
@@ -213,28 +215,26 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
                 )
 
     def _add_buffer_vars(
-        self, opt: z3.Solver, tensors: list[CoreDivisionBuffer]
-    ) -> dict[str, _CoreDivisionBufferWithVars]:
+        self, opt: z3.Solver, tensors: dict[str, _CoreDivisionBufferWithVars]
+    ) -> None:
         """Allocate per-tensor vars and return ``name ->
         CoreDivisionBufferWithVars``. ``division`` indexes the candidate list,
         ``eff_size`` is the chosen division's per-core footprint (``size`` / its
         ``output_partition``), and ``cores`` its core occupancy. A non-re-divided
         buffer has a single candidate, so ``division`` is pinned to ``0`` and these
         are constants."""
-        bufs: dict[str, _CoreDivisionBufferWithVars] = {}
-        for t in tensors:
-            n = t.name
-            bufs[n] = _CoreDivisionBufferWithVars(t)
-            offset = bufs[n].offset  # where is the buffer in lx?
-            dv = bufs[n].division
-            sv = bufs[n].eff_size
-            ov = bufs[n].cores  # cores this buffer occupies under chosen div
+        for buf in tensors.values():
+            offset = buf.offset  # where is the buffer in lx?
+            dv = buf.division
+            sv = buf.eff_size
+            ov = buf.cores  # cores this buffer occupies under chosen div
             opt.add(offset >= 0, offset < self._capacity_units)
-            opt.add(dv >= 0, dv <= len(t.core_divisions) - 1)
+            opt.add(dv >= 0, dv <= len(buf.buffer.core_divisions) - 1)
             per_core = [
-                int(np.ceil(t.size / cd.output_partition)) for cd in t.core_divisions
+                int(np.ceil(buf.buffer.size / cd.output_partition))
+                for cd in buf.buffer.core_divisions
             ]
-            partition = [cd.output_partition for cd in t.core_divisions]
+            partition = [cd.output_partition for cd in buf.buffer.core_divisions]
 
             opt.add(
                 z3.Or(
@@ -244,7 +244,6 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
                     ]
                 )
             )  # tie effective size and core occupancy to the chosen division index
-        return bufs
 
     def _add_inplace_relaxation(
         self,
