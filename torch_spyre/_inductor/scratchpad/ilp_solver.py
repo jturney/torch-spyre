@@ -130,6 +130,18 @@ class _InPlaceCandidate:
     dst: str
 
 
+@dataclass
+class _PlacementUnit:
+    """A connected component of in-place-merged buffers placed as one block."""
+
+    members: list[str]
+    footprint: int
+    start_time: int
+    end_time: int
+    base0: int  # offset z3 chose, before bottom-justify
+    base: int = 0  # final justified offset
+
+
 def _assert_core_divisions_enumerated(buffers: list[CoreDivisionBuffer]):
     """Assert that all buffers have enumerated core divisions."""
     for b in buffers:
@@ -686,42 +698,42 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
             components.setdefault(find(n), []).append(n)
 
         units = [
-            {
-                "members": names,
-                "fp": max(footprint(by_name[n]) for n in names),
-                "s": min(by_name[n].start_time for n in names),
-                "e": max(by_name[n].end_time for n in names),
-                "base0": ival(buffer_vars[names[0]]["offset"]),
-            }
+            _PlacementUnit(
+                members=names,
+                footprint=max(footprint(by_name[n]) for n in names),
+                start_time=min(by_name[n].start_time for n in names),
+                end_time=max(by_name[n].end_time for n in names),
+                base0=ival(buffer_vars[names[0]]["offset"]),
+            )
             for names in components.values()
         ]
         return self._justify(units), spilled, chosen_div
 
     @staticmethod
-    def _justify(units: list[dict[str, Any]]) -> dict[str, int]:
-        """Slide each placement unit down to the lowest free address. A unit is
-        {members, fp, s, e, base0}. Processing in current-base order and giving
-        each the lowest non-conflicting slot preserves the relative stacking, so
-        the peak never increases -- it only squeezes out the float gaps the
-        search leaves. Returns a name -> address map."""
-        placed: list[dict[str, Any]] = []
+    def _justify(units: list[_PlacementUnit]) -> dict[str, int]:
+        """Slide each placement unit down to the lowest free address. Processing
+        in current-base order and giving each the lowest non-conflicting slot
+        preserves the relative stacking, so the peak never increases -- it only
+        squeezes out the float gaps the search leaves. Returns a name -> address
+        map."""
+        placed: list[_PlacementUnit] = []
         offsets = {}
-        for u in sorted(units, key=lambda u: (u["base0"], u["s"])):
-            # lowest base whose [base, base+fp) clears every already-placed unit
-            # that overlaps this one in time
+        for u in sorted(units, key=lambda u: (u.base0, u.start_time)):
+            # lowest base whose [base, base+footprint) clears every already-placed
+            # unit that overlaps this one in time
             obstacles = sorted(
-                (p["base"], p["base"] + p["fp"])
+                (p.base, p.base + p.footprint)
                 for p in placed
-                if u["s"] < p["e"] and p["s"] < u["e"]
+                if u.start_time < p.end_time and p.start_time < u.end_time
             )
             base = 0
             for lo, hi in obstacles:
-                if base + u["fp"] <= lo:
+                if base + u.footprint <= lo:
                     break  # fits in the gap below this obstacle
                 if base < hi:
                     base = hi  # otherwise bump above it
-            u["base"] = base
+            u.base = base
             placed.append(u)
-            for n in u["members"]:
+            for n in u.members:
                 offsets[n] = base
         return offsets
