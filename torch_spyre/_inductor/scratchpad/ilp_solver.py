@@ -42,28 +42,34 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class CoreDivisionBufferWithVars:
+class _CoreDivisionBufferWithVars:
     """A :class:`CoreDivisionBuffer` bundled with the z3 variables the solver
     creates for it, so one object flows through the solve instead of a buffer
     list shadowed by a parallel ``name -> {var}`` dict.
 
     The buffer spans ``[buffer.start_time, buffer.end_time)``; the vars encode
     where (``offset``) and whether (``in_buffer``) it resides in LX, and the
-    chosen core division (``div_var``) with its per-core footprint (``eff_size``)
-    and core occupancy (``occ``)."""
+    chosen core division (``division``) with its per-core footprint
+    (``eff_size``) and core occupancy (``cores``). ``merge_vars`` maps each
+    in-place parent name to the merge bool for that parent->this edge."""
 
     buffer: CoreDivisionBuffer
-    in_buffer: z3.BoolRef  # is the buffer resident in LX?
-    offset: z3.ArithRef  # base address, in alignment units
-    div_var: z3.ArithRef  # index into ``buffer.core_divisions``
-    eff_size: z3.ArithRef  # chosen division's per-core footprint
-    occ: z3.ArithRef  # chosen division's core occupancy
 
-
-@dataclass
-class _InPlaceCandidate:
-    src: str
-    dst: str
+    def __post_init__(self):
+        self.name = self.buffer.name
+        self.end_time = self.buffer.end_time
+        self.start_time = self.buffer.start_time
+        self.offset = z3.Int(f"off_{self.buffer.name}")
+        self.eff_size = z3.Int(f"eff_size_{self.buffer.name}")
+        self.in_buffer = z3.Bool(f"in_buffer_{self.buffer.name}")
+        self.division = z3.Int(f"div_{self.buffer.name}")
+        self.cores = z3.Int(
+            f"occ_{self.buffer.name}"
+        )  # cores this buffer occupies under chosen div
+        self.merge_vars = {
+            parent: z3.Bool(f"merge_{parent}_{self.buffer.name}")
+            for parent in self.buffer.in_place_parents
+        }
 
 
 @dataclass
@@ -144,12 +150,6 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         _assert_in_place_relationships(buffers)
         _assert_core_divisions_enumerated(buffers)
 
-        candidates = [
-            _InPlaceCandidate(src=parent, dst=b.name)
-            for b in buffers
-            for parent in b.in_place_parents
-        ]
-
         # Solve on copies so we never mutate the caller's buffers.
         working = [
             replace(
@@ -159,7 +159,7 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
             for b in buffers
         ]
 
-        offsets, spilled, chosen_div = self._run(working, candidates)
+        offsets, spilled, chosen_div = self._run(working)
         offsets = {k: v * self.alignment for k, v in offsets.items()}
 
         for b in buffers:
@@ -170,38 +170,24 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
     def _run(
         self,
         tensors: list[CoreDivisionBuffer],
-        candidates: list[_InPlaceCandidate],
     ) -> tuple[dict[str, int], set[str], dict[str, int]]:
         opt = z3.Solver()
         bufs = self._add_buffer_vars(opt, tensors)
-        self._check_candidates(bufs, candidates)
-        edges = self._add_inplace_relaxation(opt, candidates, bufs)
+        self._add_inplace_relaxation(opt, bufs)
         forced = self._add_core_division(opt, bufs)
         model = self._search(opt, bufs, forced)
-        return self._extract(model, bufs, edges)
-
-    @staticmethod
-    def _check_candidates(
-        bufs: dict[str, CoreDivisionBufferWithVars],
-        candidates: list[_InPlaceCandidate],
-    ) -> None:
-        for c in candidates:
-            if c.src not in bufs or c.dst not in bufs:
-                raise ValueError(f"Candidate {c} references unknown tensor")
+        return self._extract(model, bufs)
 
     @staticmethod
     def _apply_no_overlap_constraint(
         opt: z3.Solver,
-        bufs: list[CoreDivisionBufferWithVars],
+        bufs: list[_CoreDivisionBufferWithVars],
         merge_between: dict[tuple[str, str], list[z3.BoolRef]],
     ) -> None:
         def time_overlap(
-            a: CoreDivisionBufferWithVars, b: CoreDivisionBufferWithVars
+            a: _CoreDivisionBufferWithVars, b: _CoreDivisionBufferWithVars
         ) -> bool:
-            return (
-                a.buffer.start_time < b.buffer.end_time
-                and b.buffer.start_time < a.buffer.end_time
-            )
+            return a.start_time < b.end_time and b.start_time < a.end_time
 
         for i in range(len(bufs)):
             for j in range(i + 1, len(bufs)):
@@ -212,9 +198,9 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
                 # An active merge edge (either direction) lifts the no-overlap so
                 # the pair may share a base; else, if both resident, they must be
                 # disjoint (a ends before b starts, or b before a).
-                relax = merge_between.get(
-                    (a.buffer.name, b.buffer.name), []
-                ) + merge_between.get((b.buffer.name, a.buffer.name), [])
+                relax = merge_between.get((a.name, b.name), []) + merge_between.get(
+                    (b.name, a.name), []
+                )
                 opt.add(
                     z3.Implies(
                         z3.And(a.in_buffer, b.in_buffer),
@@ -228,30 +214,28 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
 
     def _add_buffer_vars(
         self, opt: z3.Solver, tensors: list[CoreDivisionBuffer]
-    ) -> dict[str, CoreDivisionBufferWithVars]:
+    ) -> dict[str, _CoreDivisionBufferWithVars]:
         """Allocate per-tensor vars and return ``name ->
-        CoreDivisionBufferWithVars``. ``div_var`` indexes the candidate list,
+        CoreDivisionBufferWithVars``. ``division`` indexes the candidate list,
         ``eff_size`` is the chosen division's per-core footprint (``size`` / its
-        ``output_partition``), and ``occ`` its core occupancy. A non-re-divided
-        buffer has a single candidate, so ``div_var`` is pinned to ``0`` and these
+        ``output_partition``), and ``cores`` its core occupancy. A non-re-divided
+        buffer has a single candidate, so ``division`` is pinned to ``0`` and these
         are constants."""
-        bufs: dict[str, CoreDivisionBufferWithVars] = {}
+        bufs: dict[str, _CoreDivisionBufferWithVars] = {}
         for t in tensors:
             n = t.name
-
-            in_buffer = z3.Bool(f"in_buf_{n}")  # is buffer in lx?
-            offset = z3.Int(f"off_{n}")  # where is the buffer in lx?
+            bufs[n] = _CoreDivisionBufferWithVars(t)
+            offset = bufs[n].offset  # where is the buffer in lx?
+            dv = bufs[n].division
+            sv = bufs[n].eff_size
+            ov = bufs[n].cores  # cores this buffer occupies under chosen div
             opt.add(offset >= 0, offset < self._capacity_units)
-
-            dv = z3.Int(f"div_{n}")  # which core-division index are we using?
             opt.add(dv >= 0, dv <= len(t.core_divisions) - 1)
-
             per_core = [
                 int(np.ceil(t.size / cd.output_partition)) for cd in t.core_divisions
             ]
             partition = [cd.output_partition for cd in t.core_divisions]
-            sv = z3.Int(f"size_{n}")
-            ov = z3.Int(f"occ_{n}")  # cores this buffer occupies under chosen div
+
             opt.add(
                 z3.Or(
                     [
@@ -260,55 +244,44 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
                     ]
                 )
             )  # tie effective size and core occupancy to the chosen division index
-            bufs[n] = CoreDivisionBufferWithVars(
-                buffer=t,
-                in_buffer=in_buffer,
-                offset=offset,
-                div_var=dv,
-                eff_size=sv,
-                occ=ov,
-            )
         return bufs
 
     def _add_inplace_relaxation(
         self,
         opt: z3.Solver,
-        candidates: list[_InPlaceCandidate],
-        bufs: dict[str, CoreDivisionBufferWithVars],
-    ) -> list[tuple[str, str, z3.BoolRef]]:
+        bufs: dict[str, _CoreDivisionBufferWithVars],
+    ) -> None:
         """In-place reuse as a relaxation of the no-overlap constraint: each
         parent->child edge gets a merge bool that, when active, pins the pair to
         one shared base and lifts their pairwise no-overlap. Chains are induced
         transitively by the shared-offset equalities -- no merge groups, no path
         enumeration -- and ``_assert_in_place_relationships`` guarantees a
         parent/child overlap at exactly one tick, so only directly-edged pairs
-        ever need the relaxation. Returns the ``(src, dst, merge_bool)`` edge
-        list for placement-unit reconstruction in ``_extract``."""
+        ever need the relaxation. The per-buffer ``merge_vars`` bools are read
+        back in ``_extract`` to reconstruct placement units."""
         M = self._capacity_units
 
-        edges: list[tuple[str, str, z3.BoolRef]] = []
         # (src, dst) -> merge bools, consulted by the no-overlap relaxation.
         merge_between: dict[tuple[str, str], list[z3.BoolRef]] = {}
         # A storage slot is handed off linearly, so a buffer reuses at most one
         # parent and is reused by at most one child.
         incoming: dict[str, list[z3.BoolRef]] = {}
         outgoing: dict[str, list[z3.BoolRef]] = {}
-        for c in candidates:
-            m = z3.Bool(f"merge_{c.src}_{c.dst}")
-            edges.append((c.src, c.dst, m))
-            src_v, dst_v = bufs[c.src], bufs[c.dst]
-            # active merge => shared base and both endpoints resident
-            opt.add(z3.Implies(m, src_v.offset == dst_v.offset))
-            opt.add(z3.Implies(m, src_v.in_buffer))
-            opt.add(z3.Implies(m, dst_v.in_buffer))
-            # active merge => child reuses the parent's exact per-core storage,
-            # so their chosen divisions must have equal per-core footprints.
-            opt.add(z3.Implies(m, dst_v.eff_size == src_v.eff_size))
-            # active merge => parent and child must pick slicing-compatible divisions
-            self._constrain_merge_division(opt, bufs, c, m)
-            merge_between.setdefault((c.src, c.dst), []).append(m)
-            outgoing.setdefault(c.src, []).append(m)
-            incoming.setdefault(c.dst, []).append(m)
+        for dst, c in bufs.items():
+            for src, edge in c.merge_vars.items():
+                src_v, dst_v = bufs[src], bufs[dst]
+                # active merge => shared base and both endpoints resident
+                opt.add(z3.Implies(edge, src_v.offset == dst_v.offset))
+                opt.add(z3.Implies(edge, src_v.in_buffer))
+                opt.add(z3.Implies(edge, dst_v.in_buffer))
+                # active merge => child reuses the parent's exact per-core storage,
+                # so their chosen divisions must have equal per-core footprints.
+                opt.add(z3.Implies(edge, dst_v.eff_size == src_v.eff_size))
+                # active merge => parent and child must pick slicing-compatible divisions
+                self._constrain_merge_division(opt, bufs, src, dst, edge)
+                merge_between.setdefault((src, dst), []).append(edge)
+                outgoing.setdefault(src, []).append(edge)
+                incoming.setdefault(dst, []).append(edge)
 
         for ms in (*incoming.values(), *outgoing.values()):
             if len(ms) > 1:
@@ -319,30 +292,30 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
             opt.add(z3.Implies(sb.in_buffer, sb.offset + sb.eff_size <= M))
 
         self._apply_no_overlap_constraint(opt, list(bufs.values()), merge_between)
-        return edges
 
     def _constrain_merge_division(
         self,
         opt: z3.Solver,
-        bufs: dict[str, CoreDivisionBufferWithVars],
-        c: _InPlaceCandidate,
+        bufs: dict[str, _CoreDivisionBufferWithVars],
+        src: str,
+        dst: str,
         m: z3.BoolRef,
     ) -> None:
         """Gate an in-place merge on slicing-compatible divisions: when ``m`` is
-        active, parent (``c.src``) and child (``c.dst``) must pick divisions that
+        active, parent (``src``) and child (``dst``) must pick divisions that
         induce the same per-core slicing of the shared storage. Uses the
         precomputed ``cd_parent_matches`` pairs (see ``_implicate_core_division``);
-        no pairs => merge forbidden. A fixed-division endpoint has no ``div_var``
+        no pairs => merge forbidden. A fixed-division endpoint has no ``division``
         to constrain and is already governed by the ``eff_size`` equality.
         """
-        pv, cv = bufs[c.src], bufs[c.dst]
-        child = bufs[c.dst].buffer
-        compatible = child.cd_parent_matches.get(c.src, [])
-        pairs = [z3.And(pv.div_var == i, cv.div_var == j) for (i, j) in compatible]
+        pv, cv = bufs[src], bufs[dst]
+        child = bufs[dst].buffer
+        compatible = child.cd_parent_matches.get(src, [])
+        pairs = [z3.And(pv.division == i, cv.division == j) for (i, j) in compatible]
         opt.add(z3.Implies(m, z3.Or(pairs) if pairs else z3.BoolVal(False)))
 
     def _get_children(
-        self, bufs: dict[str, CoreDivisionBufferWithVars]
+        self, bufs: dict[str, _CoreDivisionBufferWithVars]
     ) -> dict[str, list[tuple[str, list[tuple[int, int]]]]]:
         """parent name -> list of (child name, match_pairs), where ``match_pairs``
         is the child's ``cd_parent_matches[parent]`` (empty when the edge has no
@@ -362,7 +335,7 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
     def _trim_oversized_tensors(
         self,
         opt: z3.Solver,
-        bufs: dict[str, CoreDivisionBufferWithVars],
+        bufs: dict[str, _CoreDivisionBufferWithVars],
     ) -> set[str]:
         """Pin out of LX the buffers whose non-residency is fixed up front:
         those whose *smallest* candidate footprint still exceeds capacity, and
@@ -390,11 +363,11 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         self,
         opt: z3.Solver,
         children_of: dict[str, list[tuple[str, list[tuple[int, int]]]]],
-        bufs: dict[str, CoreDivisionBufferWithVars],
+        bufs: dict[str, _CoreDivisionBufferWithVars],
     ) -> None:
         """Slicing-consistency gate: a resident buffer's division must match
         *every* consumer's division under the ``cd_parent_matches`` pairs. The
-        buffer carries one ``div_var``, so requiring all consumers to agree pins
+        buffer carries one ``division``, so requiring all consumers to agree pins
         them to a single per-core slicing; a buffer with diverging consumer
         demands is forced out of LX and re-sliced per consumer on load from main
         memory. An edge with no compatible pair never matches, so a
@@ -415,7 +388,7 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
                 # where a coeff signature would conflate slicings). Empty => no
                 # compatible division => no match, forbidding residency.
                 pairs = [
-                    z3.And(sb.div_var == i, bufs[_child].div_var == j)
+                    z3.And(sb.division == i, bufs[_child].division == j)
                     for (i, j) in compatible
                 ]
                 child_matches.append(z3.Or(pairs) if pairs else z3.BoolVal(False))
@@ -424,7 +397,7 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
     def _add_core_division(
         self,
         opt: z3.Solver,
-        bufs: dict[str, CoreDivisionBufferWithVars],
+        bufs: dict[str, _CoreDivisionBufferWithVars],
     ) -> set[str]:
         """Wire up children_of, forced spills, and the slicing-match gate.
         Returns the forced-spill set (the search's lower-bound seed). Matching is
@@ -437,7 +410,7 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
     def _search(
         self,
         opt: z3.Solver,
-        bufs: dict[str, CoreDivisionBufferWithVars],
+        bufs: dict[str, _CoreDivisionBufferWithVars],
         forced: set[str],
     ) -> z3.ModelRef:
         """Two sequential satisfiability phases -- residency, then occupancy --
@@ -484,7 +457,7 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         occ_iterations = []  # (mid, status, seconds)
         if model is not None:
             opt.add(spill_count == won_budget)
-            occ_terms = [z3.If(sb.in_buffer, sb.occ, 0) for sb in bufs.values()]
+            occ_terms = [z3.If(sb.in_buffer, sb.cores, 0) for sb in bufs.values()]
             if occ_terms:
                 occupancy = z3.Sum(occ_terms)
                 lo_occ = model.eval(occupancy, model_completion=True).as_long()
@@ -546,10 +519,7 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         return model
 
     def _extract(
-        self,
-        model: z3.ModelRef,
-        bufs: dict[str, CoreDivisionBufferWithVars],
-        edges: list[tuple[str, str, z3.BoolRef]],
+        self, model: z3.ModelRef, bufs: dict[str, _CoreDivisionBufferWithVars]
     ) -> tuple[dict[str, int], set[str], dict[str, int]]:
         """Read the model into (offsets, spilled, chosen_div). When
         bottom_justify is set, slide each placement unit down to the lowest free
@@ -563,7 +533,7 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
 
         by_name = {name: sb.buffer for name, sb in bufs.items()}
         spilled = {name for name, sb in bufs.items() if not bval(sb.in_buffer)}
-        chosen_div = {name: ival(sb.div_var) for name, sb in bufs.items()}
+        chosen_div = {name: ival(sb.division) for name, sb in bufs.items()}
 
         def footprint(t: CoreDivisionBuffer) -> int:
             if t.core_divisions:
@@ -597,9 +567,10 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
                 x = parent[x]
             return x
 
-        for src, dst, m in edges:
-            if bval(m):
-                parent[find(src)] = find(dst)
+        for dst, c in bufs.items():
+            for src, edge in c.merge_vars.items():
+                if bval(edge):
+                    parent[find(src)] = find(dst)
 
         components: dict[str, list[str]] = {}
         for n in resident:
