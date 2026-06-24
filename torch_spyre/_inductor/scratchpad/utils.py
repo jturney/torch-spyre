@@ -272,39 +272,3 @@ def get_ncores_for_buffers(graph: GraphLowering | GraphView) -> dict[str, int]:
             num_cores = 1
         result[buf_name] = num_cores
     return result
-
-
-def buffer_not_read_in_full(graph: GraphLowering | GraphView, buf_name: str) -> bool:
-    """True if any consumer reads less than the whole ``buf_name`` (a sliced,
-    partial, or multi-offset read), or if the footprint can't be proven to cover
-    the full buffer.
-
-    An LX-pinned buffer is addressed by a single base; unlike the HBM path, a
-    per-access slice offset is *not* folded into it, so partial reads
-    mis-address -- e.g. ``x[:, 0:512] + x[:, 512:1024]`` (both halves resolve to
-    the base) or ``x[:, :, 0:64]`` (sub-extent read). Only buffers every consumer
-    reads in full are safe to LX-pin; we are deliberately conservative and treat
-    an unprovable (symbolic) footprint as unsafe.
-
-    This is a guard, not a fix: the SDSC LX address path drops the per-access
-    view offset the HBM path folds in. Folding it back is non-trivial because the
-    offset interacts with per-core work-slicing, so until that lands the guard
-    keeps such buffers in HBM (correct, just unpinned).
-    """
-    layout = getattr(graph.get_buffer(buf_name), "layout", None)
-    if layout is None:
-        return True
-    try:
-        full = math.prod(int(concretize_expr(s)) for s in layout.size)
-    except (TypeError, ValueError):
-        return True
-    for op in graph.operations:
-        for dep in op_read_writes(op).reads:
-            if dep.name != buf_name:
-                continue
-            try:
-                if int(dep.get_numel()) < full:
-                    return True
-            except (TypeError, ValueError):
-                return True
-    return False

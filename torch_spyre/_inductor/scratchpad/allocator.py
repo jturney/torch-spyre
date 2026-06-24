@@ -61,7 +61,6 @@ from torch_spyre._inductor.scratchpad.passes import (
 from torch_spyre._inductor.scratchpad.utils import (
     OP_OUTPUT_GOOD_FOR_LX_REUSE,
     OP_GOOD_FOR_LX_INPLACE,
-    buffer_not_read_in_full,
     clone_at_graph_boundaries,
     mem_usage_by_buf,
     calculate_liveness,
@@ -236,11 +235,13 @@ class ScratchpadAllocator(ABC):
                 continue  # output is not read (only the write, or never touched)
             if any(isinstance(graph.operations[u], ExternKernel) for u in uses):
                 continue
-            if output_name in graph_output_names and not cloning_allowed and buffer_not_read_in_full(
-                graph, output_name
+            if (
+                output_name in graph_output_names
+                and not cloning_allowed
+                and buffer_not_read_in_full(graph, output_name)
             ):
                 continue  # we can only allocate graph outputs if we're allowed to clone
-            
+
             uses = lifetimes[output_name]
             parents = in_place.get(output_name, [])
             size = info["size_per_core"]
