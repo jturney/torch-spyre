@@ -42,6 +42,8 @@ from torch_spyre._inductor.pass_utils import (
 from torch_spyre._inductor.work_division import enumerate_work_division_candidates
 from torch_spyre._inductor.errors import Unsupported
 from torch_spyre._inductor.scratchpad.plan_solver import (
+    CoreDivision,
+    CoreDivisionBuffer,
     GreedyLayoutSolver,
     LifetimeBoundBuffer,
     MemoryPlanSolver,
@@ -51,8 +53,6 @@ from torch_spyre._inductor.scratchpad.firstfit_bestfit_solver import (
     FirstFitLayoutSolver,
 )
 from torch_spyre._inductor.scratchpad.ilp_solver import (
-    CoreDivision,
-    CoreDivisionBuffer,
     ILPLayoutSolver,
 )
 from torch_spyre._inductor.scratchpad.passes import (
@@ -613,7 +613,7 @@ class StrategyBCoOptimizingAllocator(DefaultAllocator):
         )
 
 
-class IlpCoOptimizingAllocator(ScratchpadAllocator):
+class CoOptimizingAllocator(ScratchpadAllocator):
     def __init__(
         self,
         pre_optimization_passes: list[ScratchpadOptimizationPass] | None = None,
@@ -723,7 +723,7 @@ class IlpCoOptimizingAllocator(ScratchpadAllocator):
     def _commit_divisions(
         self,
         graph: GraphLowering,
-        allocation: Sequence[LifetimeBoundBuffer],
+        allocation: Sequence[CoreDivisionBuffer],
     ) -> None:
         """Write the solver's chosen division back to ``op.op_it_space_splits``,
         for every resident buffer *and every consumer of one* (a consumer reads
@@ -739,7 +739,7 @@ class IlpCoOptimizingAllocator(ScratchpadAllocator):
         resident = {b.name for b in allocation if b.address is not None}
         consumers_of: dict[str, list[str]] = {}
         for b in allocation:
-            for parent in b.cd_parents:
+            for parent in b.parents:
                 consumers_of.setdefault(parent, []).append(b.name)
 
         to_commit = set(resident)
@@ -866,7 +866,7 @@ class IlpCoOptimizingAllocator(ScratchpadAllocator):
                     first_use_is_read=True,
                     in_place_parents=parents,
                     core_divisions=buf_divisions,
-                    cd_parents=parent_proj,
+                    parents=parent_proj,
                     cd_parent_matches=cd_parent_matches,
                     residency_allowed=residency_allowed,
                 )

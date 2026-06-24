@@ -16,10 +16,9 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field, replace
-from typing import Any, Optional, TYPE_CHECKING
+from dataclasses import dataclass, replace
+from typing import Any, TYPE_CHECKING
 import numpy as np
-import math
 
 
 if TYPE_CHECKING:
@@ -32,7 +31,7 @@ else:
         z3 = None
 
 from torch_spyre._inductor.scratchpad.plan_solver import (
-    LifetimeBoundBuffer,
+    CoreDivisionBuffer,
     MemoryPlanSolver,
     _assert_in_place_relationships,
 )
@@ -43,83 +42,13 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class CoreDivision:
-    """One permissible core-division of a buffer's producing op.
-
-    ``output_splits`` / ``reduction_splits`` are the stride/coeff-keyed encoding
-    produced by :func:`pass_utils.splits_by_index_coeff` -- exactly the shape
-    stored in ``op.op_it_space_splits``. ``ILPLayoutSolver`` uses these to size
-    the buffer (per-core footprint = total / ``output_partition``).
-    """
-
-    output_splits: dict[int, int] = field(default_factory=dict)
-    reduction_splits: dict[int, int] = field(default_factory=dict)
-
-    @property
-    def cores_used(self) -> int:
-        return math.prod(self.output_splits.values()) * math.prod(
-            self.reduction_splits.values()
-        )
-
-    @property
-    def is_clean(self) -> bool:
-        """True when no reduction axis is split, so the output is fully sliced
-        across cores (no per-core partial sums)."""
-        return not self.reduction_splits
-
-    @property
-    def output_partition(self) -> int:
-        """How many cores the output buffer is sliced across."""
-        return math.prod(self.output_splits.values())
-
-    def signature_key(self):
-        """Per-core slicing signature, or ``None`` for a reduction-split division
-        (a ``None`` never compares equal, so partial-reduction divisions never
-        match)."""
-        return tuple(sorted(self.output_splits.items())) if self.is_clean else None
-
-    @property
-    def label(self) -> str:
-        out = ",".join(f"s{s}/{f}" for s, f in sorted(self.output_splits.items()))
-        red = ",".join(f"~s{s}/{f}" for s, f in sorted(self.reduction_splits.items()))
-        return " ".join(p for p in (out, red) if p) or "whole"
-
-
-@dataclass
-class CoreDivisionBuffer(LifetimeBoundBuffer):
-    """A :class:`LifetimeBoundBuffer` carrying the joint core-division metadata
-    consumed only by :class:`ILPLayoutSolver`.
-
-    The placement-only solvers (greedy/first-fit/best-fit) never look at these
-    fields, so they stay on this subclass rather than the shared base.
-    """
-
-    core_divisions: list[CoreDivision] = field(default_factory=list)
-    # Producer buffer names; defines the producer->consumer edges for matching.
-    cd_parents: list[str] = field(default_factory=list[str])
-    # parent_buf_name -> (parent_div_idx, this_div_idx) pairs that induce the
-    # *same per-core slicing of the parent*, precomputed by the allocator via
-    # ``_per_core_view_on_buf`` (physical device-dim view equality, correct
-    # across reductions/reshapes). These are the sole slicing-match predicate;
-    # an absent/empty entry means no compatible division, so the gate forbids
-    # the merge/residency across that edge.
-    cd_parent_matches: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
-    chosen_division: Optional[int] = None
-    # When False the buffer may not be made resident (e.g. a graph boundary that
-    # can't be LX-pinned without a clone). It is still handed to the solver so it
-    # participates in matching -- a forced-out consumer keeps its producers'
-    # residency viable instead of orphaning them.
-    residency_allowed: bool = True
-
-
-@dataclass
 class _Box:
     """A buffer's memory layout spanning [start_time, end_time)."""
 
     name: str
     start_time: int
     end_time: int
-    goff: z3.ArithRef
+    goffset: z3.ArithRef
     gsize: z3.ArithRef
     var: z3.BoolRef
 
@@ -138,8 +67,8 @@ class _PlacementUnit:
     footprint: int
     start_time: int
     end_time: int
-    base0: int  # offset z3 chose, before bottom-justify
-    base: int = 0  # final justified offset
+    original_offset: int  # offset z3 chose, before bottom-justify
+    justified_offset: int = 0  # final justified offset
 
 
 def _assert_core_divisions_enumerated(buffers: list[CoreDivisionBuffer]):
@@ -280,8 +209,8 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
                     z3.Implies(
                         z3.And(a.var, b.var),
                         z3.Or(
-                            a.goff + a.gsize <= b.goff,
-                            b.goff + b.gsize <= a.goff,
+                            a.goffset + a.gsize <= b.goffset,
+                            b.goffset + b.gsize <= a.goffset,
                             *relax,
                         ),
                     )
@@ -381,7 +310,7 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
                 name=t.name,
                 start_time=t.start_time,
                 end_time=t.end_time,
-                goff=buffer_vars[t.name]["offset"],
+                goffset=buffer_vars[t.name]["offset"],
                 gsize=buffer_vars[t.name]["eff_size"],
                 var=buffer_vars[t.name]["in_buffer"],
             )
@@ -389,7 +318,7 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         ]
         for b in boxes:
             # if a buffer is resident its top must be below the peak usage.
-            opt.add(z3.Implies(b.var, b.goff + b.gsize <= M))
+            opt.add(z3.Implies(b.var, b.goffset + b.gsize <= M))
 
         self._apply_no_overlap_constraint(opt, boxes, merge_between)
         return edges
@@ -423,10 +352,10 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
     ) -> dict[str, list[tuple[str, list[tuple[int, int]]]]]:
         """parent name -> list of (child name, match_pairs), where ``match_pairs``
         is the child's ``cd_parent_matches[parent]`` (empty when the edge has no
-        compatible division). The child's ``cd_parents`` define the edges."""
+        compatible division). The child's ``parents`` define the edges."""
         children_of: dict[str, list[tuple[str, Any]]] = {}
         for t in tensors:
-            for parent in t.cd_parents:
+            for parent in t.parents:
                 children_of.setdefault(parent, []).append(
                     (
                         t.name,
@@ -703,7 +632,7 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
                 footprint=max(footprint(by_name[n]) for n in names),
                 start_time=min(by_name[n].start_time for n in names),
                 end_time=max(by_name[n].end_time for n in names),
-                base0=ival(buffer_vars[names[0]]["offset"]),
+                original_offset=ival(buffer_vars[names[0]]["offset"]),
             )
             for names in components.values()
         ]
@@ -718,11 +647,11 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         map."""
         placed: list[_PlacementUnit] = []
         offsets = {}
-        for u in sorted(units, key=lambda u: (u.base0, u.start_time)):
+        for u in sorted(units, key=lambda u: (u.original_offset, u.start_time)):
             # lowest base whose [base, base+footprint) clears every already-placed
             # unit that overlaps this one in time
             obstacles = sorted(
-                (p.base, p.base + p.footprint)
+                (p.justified_offset, p.justified_offset + p.footprint)
                 for p in placed
                 if u.start_time < p.end_time and p.start_time < u.end_time
             )
@@ -732,7 +661,7 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
                     break  # fits in the gap below this obstacle
                 if base < hi:
                     base = hi  # otherwise bump above it
-            u.base = base
+            u.justified_offset = base
             placed.append(u)
             for n in u.members:
                 offsets[n] = base

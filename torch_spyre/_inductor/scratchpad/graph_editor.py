@@ -20,6 +20,7 @@ from torch_spyre._inductor.pass_utils import (
     copy_op_metadata,
     iteration_space_from_op,
     splits_by_index_coeff,
+    op_read_writes,
 )
 from torch._inductor.virtualized import V
 from torch._inductor.ir import (
@@ -198,7 +199,7 @@ class GraphEditor:
             # so buffer-stride coeffs are valid clone output-split keys. Every
             # per-core split -- output-dim or reduction/k-split -- lands on the
             # matching buffer axis.
-            fu_rw = first_user.get_read_writes()
+            fu_rw = op_read_writes(first_user)
             read_dep = next((d for d in fu_rw.reads if d.name == buf_name), None)
             clone_out_splits = {}
             if read_dep is not None and any(

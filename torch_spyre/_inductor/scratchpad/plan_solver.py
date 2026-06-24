@@ -53,6 +53,76 @@ class LifetimeBoundBuffer:
         return self.uses[-1] + 1
 
 
+@dataclass
+class CoreDivision:
+    """One permissible core-division of a buffer's producing op.
+
+    ``output_splits`` / ``reduction_splits`` are the stride/coeff-keyed encoding
+    produced by :func:`pass_utils.splits_by_index_coeff` -- exactly the shape
+    stored in ``op.op_it_space_splits``. ``ILPLayoutSolver`` uses these to size
+    the buffer (per-core footprint = total / ``output_partition``).
+    """
+
+    output_splits: dict[int, int] = field(default_factory=dict)
+    reduction_splits: dict[int, int] = field(default_factory=dict)
+
+    @property
+    def cores_used(self) -> int:
+        return math.prod(self.output_splits.values()) * math.prod(
+            self.reduction_splits.values()
+        )
+
+    @property
+    def is_clean(self) -> bool:
+        """True when no reduction axis is split, so the output is fully sliced
+        across cores (no per-core partial sums)."""
+        return not self.reduction_splits
+
+    @property
+    def output_partition(self) -> int:
+        """How many cores the output buffer is sliced across."""
+        return math.prod(self.output_splits.values())
+
+    def signature_key(self):
+        """Per-core slicing signature, or ``None`` for a reduction-split division
+        (a ``None`` never compares equal, so partial-reduction divisions never
+        match)."""
+        return tuple(sorted(self.output_splits.items())) if self.is_clean else None
+
+    @property
+    def label(self) -> str:
+        out = ",".join(f"s{s}/{f}" for s, f in sorted(self.output_splits.items()))
+        red = ",".join(f"~s{s}/{f}" for s, f in sorted(self.reduction_splits.items()))
+        return " ".join(p for p in (out, red) if p) or "whole"
+
+
+@dataclass
+class CoreDivisionBuffer(LifetimeBoundBuffer):
+    """A :class:`LifetimeBoundBuffer` carrying the joint core-division metadata
+    consumed only by :class:`ILPLayoutSolver`.
+
+    The placement-only solvers (greedy/first-fit/best-fit) never look at these
+    fields, so they stay on this subclass rather than the shared base.
+    """
+
+    core_divisions: list[CoreDivision] = field(default_factory=list)
+    # Producer buffer names; defines the producer->consumer edges for matching.
+    parents: list[str] = field(default_factory=list[str])
+    # parent_buf_name -> (parent_div_idx, this_div_idx) pairs that induce the
+    # *same per-core slicing of the parent*, precomputed by the allocator via
+    # ``_per_core_view_on_buf`` (physical device-dim view equality, correct
+    # across reductions/reshapes). These are the sole slicing-match predicate;
+    # an absent/empty entry means no compatible division, so the gate forbids
+    # the merge/residency across that edge.
+    cd_parent_matches: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
+    chosen_division: Optional[int] = None
+    # When False the buffer may not be made resident (e.g. a graph boundary that
+    # can't be LX-pinned without a clone). It is still handed to the solver so it
+    # participates in matching -- a forced-out consumer keeps its producers'
+    # residency viable instead of orphaning them.
+    residency_allowed: bool = True
+
+
 def _assert_in_place_relationships(
     buffers: Sequence["LifetimeBoundBuffer"],
 ) -> None:

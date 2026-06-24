@@ -571,9 +571,9 @@ class TestIntermediatePartialReadNotPinned(TestScratchpadUsage):
 
 @unittest.skipUnless(_HAS_Z3, "z3-solver not installed")
 class TestIlpAllocatorIntegration(TestScratchpadUsage):
-    """Real-graph coverage for IlpCoOptimizingAllocator.
+    """Real-graph coverage for CoOptimizingAllocator.
     Patching layout_solver="ilp" routes _maybe_scratchpad_planning to
-    IlpCoOptimizingAllocator, puts a compiled graph through the
+    CoOptimizingAllocator, puts a compiled graph through the
     allocator's translation layer (_division_map /
     _enumerate_core_divisions / _cd_parent_matches / _build_cd_bound_buffers /
     _residency_by_buf) and _commit_divisions.

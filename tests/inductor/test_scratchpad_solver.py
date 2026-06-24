@@ -17,13 +17,13 @@
 import unittest
 from unittest import TestCase
 from torch_spyre._inductor.scratchpad.plan_solver import (
+    CoreDivision,
+    CoreDivisionBuffer,
     GreedyLayoutSolver,
     LifetimeBoundBuffer,
 )
 
 from torch_spyre._inductor.scratchpad.ilp_solver import (
-    CoreDivision,
-    CoreDivisionBuffer,
     ILPLayoutSolver,
 )
 
@@ -409,7 +409,7 @@ class TestIlpJointDivision(TestCase):
         # its in-place parent G's storage. The chain tail TERMINAL is
         # consumer-less and is correctly force-spilled by the no-consumer
         # residency gate, so it is the one buffer left without an address.
-        # cd_parents / cd_parent_matches are set by the chain loop below, so only
+        # parents / cd_parent_matches are set by the chain loop below, so only
         # the fields that differ from the defaults are passed here: every buffer
         # carries the whole-only division, and P declares its in-place parents.
         buffers = [
@@ -440,10 +440,10 @@ class TestIlpJointDivision(TestCase):
         ]
         for i in range(1, len(buffers)):
             buffers[i].cd_parent_matches = {buffers[i - 1].name: [(0, 0)]}
-            buffers[i].cd_parents = [buffers[i - 1].name]
+            buffers[i].parents = [buffers[i - 1].name]
         buffers_by_name = {b.name: b for b in buffers}
         # The in-place merge gate matches on cd_parent_matches, not on the linear
-        # cd_parents chain, so P's in-place parents G/N need explicit pairs too.
+        # parents chain, so P's in-place parents G/N need explicit pairs too.
         buffers_by_name["P"].cd_parent_matches.update({"G": [(0, 0)], "N": [(0, 0)]})
 
         results = ILPLayoutSolver(size=120, alignment=1).plan_layout(buffers)
@@ -477,7 +477,7 @@ class TestIlpJointDivision(TestCase):
             400,
             [1, 3],
             core_divisions=self._divs(),
-            cd_parents=["P"],
+            parents=["P"],
             cd_parent_matches={"P": [(0, 0), (1, 1)]},
         )
         # Give C a downstream consumer so it isn't force-spilled by no_consumer.
@@ -486,7 +486,7 @@ class TestIlpJointDivision(TestCase):
             100,
             [3, 4],
             core_divisions=self._divs(),
-            cd_parents=["C"],
+            parents=["C"],
             cd_parent_matches={"C": [(0, 0), (1, 1)]},
         )
         result = {
@@ -519,7 +519,7 @@ class TestIlpJointDivision(TestCase):
             1000,
             [1, 2],
             core_divisions=self._divs(),
-            cd_parents=["P"],
+            parents=["P"],
         )
         result = {
             b.name: b
