@@ -42,15 +42,22 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class _Box:
-    """A buffer's memory layout spanning [start_time, end_time)."""
+class CoreDivisionBufferWithVars:
+    """A :class:`CoreDivisionBuffer` bundled with the z3 variables the solver
+    creates for it, so one object flows through the solve instead of a buffer
+    list shadowed by a parallel ``name -> {var}`` dict.
 
-    name: str
-    start_time: int
-    end_time: int
-    goffset: z3.ArithRef
-    gsize: z3.ArithRef
-    var: z3.BoolRef
+    The buffer spans ``[buffer.start_time, buffer.end_time)``; the vars encode
+    where (``offset``) and whether (``in_buffer``) it resides in LX, and the
+    chosen core division (``div_var``) with its per-core footprint (``eff_size``)
+    and core occupancy (``occ``)."""
+
+    buffer: CoreDivisionBuffer
+    in_buffer: z3.BoolRef  # is the buffer resident in LX?
+    offset: z3.ArithRef  # base address, in alignment units
+    div_var: z3.ArithRef  # index into ``buffer.core_divisions``
+    eff_size: z3.ArithRef  # chosen division's per-core footprint
+    occ: z3.ArithRef  # chosen division's core occupancy
 
 
 @dataclass
@@ -165,52 +172,55 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         tensors: list[CoreDivisionBuffer],
         candidates: list[_InPlaceCandidate],
     ) -> tuple[dict[str, int], set[str], dict[str, int]]:
-        by_name = {t.name: t for t in tensors}
-        self._check_candidates(by_name, candidates)
-
         opt = z3.Solver()
-        buffer_vars = self._add_buffer_vars(opt, tensors)
-        edges = self._add_inplace_relaxation(opt, tensors, candidates, buffer_vars)
-        forced = self._add_core_division(opt, tensors, buffer_vars)
-        model = self._search(opt, tensors, buffer_vars, forced)
-        return self._extract(model, tensors, buffer_vars, edges)
+        bufs = self._add_buffer_vars(opt, tensors)
+        self._check_candidates(bufs, candidates)
+        edges = self._add_inplace_relaxation(opt, candidates, bufs)
+        forced = self._add_core_division(opt, bufs)
+        model = self._search(opt, bufs, forced)
+        return self._extract(model, bufs, edges)
 
     @staticmethod
     def _check_candidates(
-        by_name: dict[str, CoreDivisionBuffer],
+        bufs: dict[str, CoreDivisionBufferWithVars],
         candidates: list[_InPlaceCandidate],
     ) -> None:
         for c in candidates:
-            if c.src not in by_name or c.dst not in by_name:
+            if c.src not in bufs or c.dst not in bufs:
                 raise ValueError(f"Candidate {c} references unknown tensor")
 
     @staticmethod
     def _apply_no_overlap_constraint(
         opt: z3.Solver,
-        boxes: list[_Box],
+        bufs: list[CoreDivisionBufferWithVars],
         merge_between: dict[tuple[str, str], list[z3.BoolRef]],
     ) -> None:
-        def time_overlap(a: _Box, b: _Box) -> bool:
-            return a.start_time < b.end_time and b.start_time < a.end_time
+        def time_overlap(
+            a: CoreDivisionBufferWithVars, b: CoreDivisionBufferWithVars
+        ) -> bool:
+            return (
+                a.buffer.start_time < b.buffer.end_time
+                and b.buffer.start_time < a.buffer.end_time
+            )
 
-        for i in range(len(boxes)):
-            for j in range(i + 1, len(boxes)):
-                a, b = boxes[i], boxes[j]
+        for i in range(len(bufs)):
+            for j in range(i + 1, len(bufs)):
+                a, b = bufs[i], bufs[j]
                 # unrelated if they never overlap in time
                 if not time_overlap(a, b):
                     continue
                 # An active merge edge (either direction) lifts the no-overlap so
                 # the pair may share a base; else, if both resident, they must be
                 # disjoint (a ends before b starts, or b before a).
-                relax = merge_between.get((a.name, b.name), []) + merge_between.get(
-                    (b.name, a.name), []
-                )
+                relax = merge_between.get(
+                    (a.buffer.name, b.buffer.name), []
+                ) + merge_between.get((b.buffer.name, a.buffer.name), [])
                 opt.add(
                     z3.Implies(
-                        z3.And(a.var, b.var),
+                        z3.And(a.in_buffer, b.in_buffer),
                         z3.Or(
-                            a.goffset + a.gsize <= b.goffset,
-                            b.goffset + b.gsize <= a.goffset,
+                            a.offset + a.eff_size <= b.offset,
+                            b.offset + b.eff_size <= a.offset,
                             *relax,
                         ),
                     )
@@ -218,27 +228,23 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
 
     def _add_buffer_vars(
         self, opt: z3.Solver, tensors: list[CoreDivisionBuffer]
-    ) -> dict[str, dict[str, z3.ExprRef]]:
-        """Allocate per-tensor vars: name -> {offset, in_buffer, div_var,
-        eff_size, occ}. ``div_var`` indexes the candidate list, ``eff_size`` is
-        the chosen division's per-core footprint (``size`` / its
+    ) -> dict[str, CoreDivisionBufferWithVars]:
+        """Allocate per-tensor vars and return ``name ->
+        CoreDivisionBufferWithVars``. ``div_var`` indexes the candidate list,
+        ``eff_size`` is the chosen division's per-core footprint (``size`` / its
         ``output_partition``), and ``occ`` its core occupancy. A non-re-divided
-        buffer has a single candidate, so ``div_var`` is ``[0, 0]`` and these are
-        constants."""
-        buffer_vars: dict[str, dict[str, z3.ExprRef]] = {}
+        buffer has a single candidate, so ``div_var`` is pinned to ``0`` and these
+        are constants."""
+        bufs: dict[str, CoreDivisionBufferWithVars] = {}
         for t in tensors:
             n = t.name
-            entry: dict[str, z3.ExprRef] = {}
-            buffer_vars[n] = entry
 
-            entry["in_buffer"] = z3.Bool(f"in_buf_{n}")  # is buffer in lx?
-            offset = z3.Int(f"off_{n}")
+            in_buffer = z3.Bool(f"in_buf_{n}")  # is buffer in lx?
+            offset = z3.Int(f"off_{n}")  # where is the buffer in lx?
             opt.add(offset >= 0, offset < self._capacity_units)
-            entry["offset"] = offset  # where is the buffer in lx?
 
-            dv = z3.Int(f"div_{n}")
+            dv = z3.Int(f"div_{n}")  # which core-division index are we using?
             opt.add(dv >= 0, dv <= len(t.core_divisions) - 1)
-            entry["div_var"] = dv  # which core-division index are we using?
 
             per_core = [
                 int(np.ceil(t.size / cd.output_partition)) for cd in t.core_divisions
@@ -254,16 +260,21 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
                     ]
                 )
             )  # tie effective size and core occupancy to the chosen division index
-            entry["eff_size"] = sv
-            entry["occ"] = ov
-        return buffer_vars
+            bufs[n] = CoreDivisionBufferWithVars(
+                buffer=t,
+                in_buffer=in_buffer,
+                offset=offset,
+                div_var=dv,
+                eff_size=sv,
+                occ=ov,
+            )
+        return bufs
 
     def _add_inplace_relaxation(
         self,
         opt: z3.Solver,
-        tensors: list[CoreDivisionBuffer],
         candidates: list[_InPlaceCandidate],
-        buffer_vars: dict[str, dict[str, z3.ExprRef]],
+        bufs: dict[str, CoreDivisionBufferWithVars],
     ) -> list[tuple[str, str, z3.BoolRef]]:
         """In-place reuse as a relaxation of the no-overlap constraint: each
         parent->child edge gets a merge bool that, when active, pins the pair to
@@ -285,16 +296,16 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         for c in candidates:
             m = z3.Bool(f"merge_{c.src}_{c.dst}")
             edges.append((c.src, c.dst, m))
-            src_v, dst_v = buffer_vars[c.src], buffer_vars[c.dst]
+            src_v, dst_v = bufs[c.src], bufs[c.dst]
             # active merge => shared base and both endpoints resident
-            opt.add(z3.Implies(m, src_v["offset"] == dst_v["offset"]))
-            opt.add(z3.Implies(m, src_v["in_buffer"]))
-            opt.add(z3.Implies(m, dst_v["in_buffer"]))
+            opt.add(z3.Implies(m, src_v.offset == dst_v.offset))
+            opt.add(z3.Implies(m, src_v.in_buffer))
+            opt.add(z3.Implies(m, dst_v.in_buffer))
             # active merge => child reuses the parent's exact per-core storage,
             # so their chosen divisions must have equal per-core footprints.
-            opt.add(z3.Implies(m, dst_v["eff_size"] == src_v["eff_size"]))
+            opt.add(z3.Implies(m, dst_v.eff_size == src_v.eff_size))
             # active merge => parent and child must pick slicing-compatible divisions
-            self._constrain_merge_division(opt, tensors, buffer_vars, c, m)
+            self._constrain_merge_division(opt, bufs, c, m)
             merge_between.setdefault((c.src, c.dst), []).append(m)
             outgoing.setdefault(c.src, []).append(m)
             incoming.setdefault(c.dst, []).append(m)
@@ -303,31 +314,17 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
             if len(ms) > 1:
                 opt.add(z3.Sum(ms) <= 1)
 
-        # One box per buffer: residency drives peak, and the pairwise no-overlap
-        # may be relaxed by an active merge edge between the pair.
-        boxes = [
-            _Box(
-                name=t.name,
-                start_time=t.start_time,
-                end_time=t.end_time,
-                goffset=buffer_vars[t.name]["offset"],
-                gsize=buffer_vars[t.name]["eff_size"],
-                var=buffer_vars[t.name]["in_buffer"],
-            )
-            for t in tensors
-        ]
-        for b in boxes:
+        for sb in bufs.values():
             # if a buffer is resident its top must be below the peak usage.
-            opt.add(z3.Implies(b.var, b.goffset + b.gsize <= M))
+            opt.add(z3.Implies(sb.in_buffer, sb.offset + sb.eff_size <= M))
 
-        self._apply_no_overlap_constraint(opt, boxes, merge_between)
+        self._apply_no_overlap_constraint(opt, list(bufs.values()), merge_between)
         return edges
 
     def _constrain_merge_division(
         self,
         opt: z3.Solver,
-        tensors: list[CoreDivisionBuffer],
-        buffer_vars: dict[str, dict[str, z3.ExprRef]],
+        bufs: dict[str, CoreDivisionBufferWithVars],
         c: _InPlaceCandidate,
         m: z3.BoolRef,
     ) -> None:
@@ -338,23 +335,21 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         no pairs => merge forbidden. A fixed-division endpoint has no ``div_var``
         to constrain and is already governed by the ``eff_size`` equality.
         """
-        pv, cv = buffer_vars[c.src], buffer_vars[c.dst]
-        by_name = {t.name: t for t in tensors}
-        child = by_name[c.dst]
+        pv, cv = bufs[c.src], bufs[c.dst]
+        child = bufs[c.dst].buffer
         compatible = child.cd_parent_matches.get(c.src, [])
-        pairs = [
-            z3.And(pv["div_var"] == i, cv["div_var"] == j) for (i, j) in compatible
-        ]
+        pairs = [z3.And(pv.div_var == i, cv.div_var == j) for (i, j) in compatible]
         opt.add(z3.Implies(m, z3.Or(pairs) if pairs else z3.BoolVal(False)))
 
     def _get_children(
-        self, tensors: list[CoreDivisionBuffer]
+        self, bufs: dict[str, CoreDivisionBufferWithVars]
     ) -> dict[str, list[tuple[str, list[tuple[int, int]]]]]:
         """parent name -> list of (child name, match_pairs), where ``match_pairs``
         is the child's ``cd_parent_matches[parent]`` (empty when the edge has no
         compatible division). The child's ``parents`` define the edges."""
         children_of: dict[str, list[tuple[str, Any]]] = {}
-        for t in tensors:
+        for sb in bufs.values():
+            t = sb.buffer
             for parent in t.parents:
                 children_of.setdefault(parent, []).append(
                     (
@@ -367,8 +362,7 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
     def _trim_oversized_tensors(
         self,
         opt: z3.Solver,
-        tensors: list[CoreDivisionBuffer],
-        buffer_vars: dict[str, dict[str, z3.ExprRef]],
+        bufs: dict[str, CoreDivisionBufferWithVars],
     ) -> set[str]:
         """Pin out of LX the buffers whose non-residency is fixed up front:
         those whose *smallest* candidate footprint still exceeds capacity, and
@@ -377,7 +371,8 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         (no consumer, or all consumers mismatch the slicing) is left to
         ``_implicate_core_division`` rather than decided here."""
         forced = set()
-        for t in tensors:
+        for sb in bufs.values():
+            t = sb.buffer
             min_size = (
                 min(
                     int(np.ceil(t.size / cd.output_partition))
@@ -388,15 +383,14 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
             )
             if min_size > self._capacity_units or not t.residency_allowed:
                 forced.add(t.name)
-                opt.add(z3.Not(buffer_vars[t.name]["in_buffer"]))
+                opt.add(z3.Not(sb.in_buffer))
         return forced
 
     def _implicate_core_division(
         self,
         opt: z3.Solver,
-        tensors: list[CoreDivisionBuffer],
         children_of: dict[str, list[tuple[str, list[tuple[int, int]]]]],
-        buffer_vars: dict[str, dict[str, z3.ExprRef]],
+        bufs: dict[str, CoreDivisionBufferWithVars],
     ) -> None:
         """Slicing-consistency gate: a resident buffer's division must match
         *every* consumer's division under the ``cd_parent_matches`` pairs. The
@@ -407,11 +401,12 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         partial-reduction buffer resides only when a consumer reads those
         partials under the identical slicing. A divided buffer with no consumer
         edge is gated out the same way -- nothing reads it from LX."""
-        for t in tensors:
+        for sb in bufs.values():
+            t = sb.buffer
             kids = children_of.get(t.name, [])
             if not kids:
                 # Nothing consumes this buffer from LX -> it can never reside.
-                opt.add(z3.Not(buffer_vars[t.name]["in_buffer"]))
+                opt.add(z3.Not(sb.in_buffer))
                 continue
             child_matches = []
             for _child, compatible in kids:
@@ -420,34 +415,29 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
                 # where a coeff signature would conflate slicings). Empty => no
                 # compatible division => no match, forbidding residency.
                 pairs = [
-                    z3.And(
-                        buffer_vars[t.name]["div_var"] == i,
-                        buffer_vars[_child]["div_var"] == j,
-                    )
+                    z3.And(sb.div_var == i, bufs[_child].div_var == j)
                     for (i, j) in compatible
                 ]
                 child_matches.append(z3.Or(pairs) if pairs else z3.BoolVal(False))
-            opt.add(z3.Implies(buffer_vars[t.name]["in_buffer"], z3.And(child_matches)))
+            opt.add(z3.Implies(sb.in_buffer, z3.And(child_matches)))
 
     def _add_core_division(
         self,
         opt: z3.Solver,
-        tensors: list[CoreDivisionBuffer],
-        buffer_vars: dict[str, dict[str, z3.ExprRef]],
+        bufs: dict[str, CoreDivisionBufferWithVars],
     ) -> set[str]:
         """Wire up children_of, forced spills, and the slicing-match gate.
         Returns the forced-spill set (the search's lower-bound seed). Matching is
         driven entirely by the precomputed ``cd_parent_matches`` pairs."""
-        children_of = self._get_children(tensors)
-        forced = self._trim_oversized_tensors(opt, tensors, buffer_vars)
-        self._implicate_core_division(opt, tensors, children_of, buffer_vars)
+        children_of = self._get_children(bufs)
+        forced = self._trim_oversized_tensors(opt, bufs)
+        self._implicate_core_division(opt, children_of, bufs)
         return forced
 
     def _search(
         self,
         opt: z3.Solver,
-        tensors: list[CoreDivisionBuffer],
-        buffer_vars: dict[str, dict[str, z3.ExprRef]],
+        bufs: dict[str, CoreDivisionBufferWithVars],
         forced: set[str],
     ) -> z3.ModelRef:
         """Two sequential satisfiability phases -- residency, then occupancy --
@@ -466,11 +456,9 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         if self._time_limit_seconds:
             opt.set("timeout", int(self._time_limit_seconds * 1000))
 
-        spill_count = z3.Sum(
-            [z3.If(buffer_vars[t.name]["in_buffer"], 0, 1) for t in tensors]
-        )
+        spill_count = z3.Sum([z3.If(sb.in_buffer, 0, 1) for sb in bufs.values()])
 
-        n_tensors = len(tensors)
+        n_tensors = len(bufs)
         lo = len(forced)
         iterations = []  # (budget, status, seconds)
         model = None
@@ -496,18 +484,14 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         occ_iterations = []  # (mid, status, seconds)
         if model is not None:
             opt.add(spill_count == won_budget)
-            occ_terms = [
-                z3.If(v["in_buffer"], v["occ"], 0)
-                for v in buffer_vars.values()
-                if "occ" in v
-            ]
+            occ_terms = [z3.If(sb.in_buffer, sb.occ, 0) for sb in bufs.values()]
             if occ_terms:
                 occupancy = z3.Sum(occ_terms)
                 lo_occ = model.eval(occupancy, model_completion=True).as_long()
                 hi_occ = sum(
-                    max(cd.output_partition for cd in t.core_divisions)
-                    for t in tensors
-                    if t.core_divisions
+                    max(cd.output_partition for cd in sb.buffer.core_divisions)
+                    for sb in bufs.values()
+                    if sb.buffer.core_divisions
                 )
                 won_occupancy = lo_occ
                 while lo_occ < hi_occ:
@@ -564,8 +548,7 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
     def _extract(
         self,
         model: z3.ModelRef,
-        tensors: list[CoreDivisionBuffer],
-        buffer_vars: dict[str, dict[str, z3.ExprRef]],
+        bufs: dict[str, CoreDivisionBufferWithVars],
         edges: list[tuple[str, str, z3.BoolRef]],
     ) -> tuple[dict[str, int], set[str], dict[str, int]]:
         """Read the model into (offsets, spilled, chosen_div). When
@@ -578,13 +561,9 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         def ival(x):
             return model.eval(x, model_completion=True).as_long()
 
-        by_name = {t.name: t for t in tensors}
-        spilled = {
-            t.name for t in tensors if not bval(buffer_vars[t.name]["in_buffer"])
-        }
-        chosen_div = {
-            n: ival(v["div_var"]) for n, v in buffer_vars.items() if "div_var" in v
-        }
+        by_name = {name: sb.buffer for name, sb in bufs.items()}
+        spilled = {name for name, sb in bufs.items() if not bval(sb.in_buffer)}
+        chosen_div = {name: ival(sb.div_var) for name, sb in bufs.items()}
 
         def footprint(t: CoreDivisionBuffer) -> int:
             if t.core_divisions:
@@ -598,9 +577,9 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         if not self._bottom_justify:
             return (
                 {
-                    t.name: ival(buffer_vars[t.name]["offset"])
-                    for t in tensors
-                    if bval(buffer_vars[t.name]["in_buffer"])
+                    name: ival(sb.offset)
+                    for name, sb in bufs.items()
+                    if bval(sb.in_buffer)
                 },
                 spilled,
                 chosen_div,
@@ -632,7 +611,7 @@ class ILPLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
                 footprint=max(footprint(by_name[n]) for n in names),
                 start_time=min(by_name[n].start_time for n in names),
                 end_time=max(by_name[n].end_time for n in names),
-                original_offset=ival(buffer_vars[names[0]]["offset"]),
+                original_offset=ival(bufs[names[0]].offset),
             )
             for names in components.values()
         ]

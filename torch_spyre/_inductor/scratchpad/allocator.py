@@ -762,7 +762,7 @@ class CoOptimizingAllocator(ScratchpadAllocator):
         self,
         graph: GraphLowering,
         divisions: dict[str, list[CoreDivision]],
-    ) -> list[Operation]:
+    ) -> list[CoreDivisionBuffer]:
         in_place = self._determine_in_place(graph)
         buffers = self._build_cd_bound_buffers(graph, in_place, divisions)
         return buffers
@@ -814,7 +814,7 @@ class CoOptimizingAllocator(ScratchpadAllocator):
         graph: GraphLowering,
         in_place: Optional[dict[str, list[str]]],
         divisions: dict[str, list[CoreDivision]],
-    ) -> list[LifetimeBoundBuffer]:
+    ) -> list[CoreDivisionBuffer]:
         """Build the ``CoreDivisionBuffer``s handed to the solver.
 
         Every buffer carries its candidate ``divisions`` and is sized by its
@@ -831,7 +831,7 @@ class CoOptimizingAllocator(ScratchpadAllocator):
         # keyed by (op, dep, buf), so a parent read by several consumers prepares
         # its write-view once and each op's sympy work is reused across divisions.
         prep_cache: dict = {}
-        buffers: list[LifetimeBoundBuffer] = []
+        buffers: list[CoreDivisionBuffer] = []
         # Residency for every buffer up front: ``_cd_parent_matches`` consults the
         # same map so it never matches against a never-resident parent. Computed
         # before the loop because a parent can appear later than its consumer.
