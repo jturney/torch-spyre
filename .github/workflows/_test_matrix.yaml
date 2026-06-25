@@ -31,11 +31,18 @@ on:
         type: string
         default: image_spyre_backend
 
-      # Flags appended to every `bash tests/run_test.sh <config>` call
+      # Flags appended to every `bash tests/run_test.sh <config>` call for the test job
       extra_test_flags:
-        description: Extra flags passed to run_test.sh (e.g. "-v" or "--cpu-compile -vvv -s")
+        description: Extra flags passed to run_test.sh for the test job (e.g. "-v" or "--cpu-compile -vvv -s")
         required: true
         type: string
+
+      # Flags appended to every `bash tests/run_test.sh <config>` call for the test_multi_spyre job
+      extra_test_flags_multi_spyre:
+        description: Extra flags passed to run_test.sh for the test_multi_spyre job (e.g. "-v")
+        required: false
+        type: string
+        default: ''
 
       # Whether to run checkout-pytorch (nightly only)
       checkout_pytorch:
@@ -134,6 +141,8 @@ jobs:
             config: torch_spyre_tests/inductor/test_copy_back_elision_config.yaml
           - name: Inductor Decomp
             config: torch_spyre_tests/inductor/test_decomp_config.yaml
+          - name: Inductor Fallback Kernel Shapes
+            config: torch_spyre_tests/inductor/test_fallback_kernel_shapes_config.yaml
           - name: Inductor FX Passes
             config: torch_spyre_tests/inductor/test_inductor_fx_passes_config.yaml
           - name: Inductor Normalization Scalars
@@ -182,6 +191,8 @@ jobs:
             config: torch_spyre_tests/inductor/test_padding_config.yaml
           - name: Inductor Overwrite
             config: torch_spyre_tests/inductor/test_overwrite.yaml
+          - name: Inductor Propagate Named Dims
+            config: torch_spyre_tests/inductor/test_propagate_named_dims_config.yaml
           - name: Inductor Restickify
             config: torch_spyre_tests/inductor/test_restickify_config.yaml
           - name: Inductor Scratchpad Patterns
@@ -337,7 +348,7 @@ jobs:
         with:
           suite_name: ${{ matrix.suite.name }}
           config: tests/configs/${{ matrix.suite.config }}
-          extra_test_flags: ${{ inputs.extra_test_flags }}
+          extra_test_flags: ${{ inputs.extra_test_flags_multi_spyre }}
           parallel: 'false'
           junit_xml_path: ${{ env.REPORT_PATH }}
           report_name: ${{ env.REPORT_NAME }}
