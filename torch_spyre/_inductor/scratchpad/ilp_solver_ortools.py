@@ -142,6 +142,10 @@ class _CoreDivisionBufferWithCpVars:
             for parent in b.in_place_parents
         }
 
+        # tie effective size and core occupancy to the chosen division index
+        self.model.AddElement(self.division, per_core, self.eff_size)
+        self.model.AddElement(self.division, partition, self.cores)
+
 
 class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
     """Joint core-division + LX placement via an OR-Tools CP-SAT search
@@ -209,7 +213,6 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         tensors: dict[str, _CoreDivisionBufferWithCpVars],
     ) -> tuple[dict[str, int], set[str], dict[str, int]]:
         children_of = self._get_children(tensors)
-        self._add_buffer_vars(model, tensors)
         self._add_inplace_relaxation(model, tensors)
         forced = self._add_core_division(model, tensors, children_of)
         self._add_objective(model, tensors, children_of)
@@ -241,25 +244,6 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
 
         return self._extract(solver, tensors)
 
-    def _add_buffer_vars(
-        self,
-        model: "cp_model.CpModel",
-        tensors: dict[str, _CoreDivisionBufferWithCpVars],
-    ) -> None:
-        """Tie each buffer's ``eff_size`` and ``cores`` to its chosen ``division``
-        index. ``division`` indexes the candidate list, ``eff_size`` is the chosen
-        division's per-core footprint (``size`` / its ``output_partition``), and
-        ``cores`` its core occupancy. A non-re-divided buffer has a single
-        candidate, so ``division`` is pinned to ``0`` and these are constants."""
-        for sb in tensors.values():
-            b = sb.buffer
-            per_core = [
-                int(np.ceil(b.size / cd.output_partition)) for cd in b.core_divisions
-            ]
-            partition = [cd.output_partition for cd in b.core_divisions]
-            # tie effective size and core occupancy to the chosen division index
-            model.AddElement(sb.division, per_core, sb.eff_size)
-            model.AddElement(sb.division, partition, sb.cores)
 
     def _add_inplace_relaxation(
         self,
