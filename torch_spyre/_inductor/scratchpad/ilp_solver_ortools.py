@@ -22,7 +22,7 @@ constraint model over :class:`CoreDivisionBuffer`s:
   var indexes the buffer's candidate divisions (from
   ``enumerate_work_division_candidates``) and ``AddElement`` ties the chosen
   index to the per-core footprint (``eff_size = size / output_partition``) and
-  core occupancy (``cores``).
+  total core usage (``cores = cores_used``, including any reduction-axis split).
 * **Slicing-match residency gate.** A resident buffer's division must induce the
   same per-core slicing as *every* consumer's, using the precomputed
   ``cd_parent_matches`` pairs over the ``parents`` (producer/consumer) edges; a
@@ -37,10 +37,12 @@ constraint model over :class:`CoreDivisionBuffer`s:
   (``_assert_in_place_relationships``) makes this exact (``_add_no_overlap_2d``).
 * **Objective.** Minimize total **HBM transfer traffic** -- spilling a buffer
   forces each of its consumers to re-read it from HBM, so a spill costs
-  ``num_consumers * size`` -- then maximize resident core occupancy:
+  ``num_consumers * size`` -- then maximize total core occupancy:
   ``minimize sum_b child_count_b * size_b * spilled_b - occupancy``
   (``_add_objective``). Under capacity pressure this keeps heavily-read / large
-  buffers resident in preference to several cheap ones.
+  buffers resident in preference to several cheap ones. The occupancy term sums
+  over *all* buffers, so a spilled buffer (free of the slicing gate) still takes
+  its most parallel division -- which the allocator commits.
 
 After the solve, ``_justify`` slides each in-place-merged placement unit down to
 the lowest free address, squeezing out float gaps without raising the peak.
@@ -105,8 +107,9 @@ class _CoreDivisionBufferWithCpVars:
     The buffer spans ``[buffer.start_time, buffer.end_time)``; the vars encode
     where (``offset``) and whether (``in_buffer``) it resides in LX, and the
     chosen core division (``division``) with its per-core footprint
-    (``eff_size``) and core occupancy (``cores``). ``merge_vars`` maps each
-    in-place parent name to the merge bool for that parent->this edge.
+    (``eff_size``) and total core usage (``cores`` = ``cores_used``, including
+    any reduction-axis split). ``merge_vars`` maps each in-place parent name to
+    the merge bool for that parent->this edge.
 
     CP-SAT variables must be created against a model, so this wrapper takes the
     model and the unit capacity ``M`` and creates only the variables here; the
@@ -132,19 +135,23 @@ class _CoreDivisionBufferWithCpVars:
         per_core = [
             int(np.ceil(b.size / cd.output_partition)) for cd in b.core_divisions
         ]
-        partition = [cd.output_partition for cd in b.core_divisions]
+        # Total cores the op runs on under each division -- includes any
+        # reduction-axis split, so a reduction-parallel division counts its full
+        # parallelism (``output_partition`` alone would score it as 1 core).
+        cores_used = [cd.cores_used for cd in b.core_divisions]
         self.division = m.NewIntVar(0, len(b.core_divisions) - 1, f"div_{b.name}")
         self.eff_size = m.NewIntVar(0, max(per_core), f"eff_size_{b.name}")
-        # cores this buffer occupies under chosen div
-        self.cores = m.NewIntVar(0, max(partition), f"occ_{b.name}")
+        # total cores this op uses under the chosen div
+        self.cores = m.NewIntVar(0, max(cores_used), f"occ_{b.name}")
         self.merge_vars = {
             parent: m.NewBoolVar(f"merge_{parent}_{b.name}")
             for parent in b.in_place_parents
         }
 
-        # tie effective size and core occupancy to the chosen division index
+        # tie per-core footprint (output split only) and total core usage to the
+        # chosen division index
         self.model.AddElement(self.division, per_core, self.eff_size)
-        self.model.AddElement(self.division, partition, self.cores)
+        self.model.AddElement(self.division, cores_used, self.cores)
 
 
 class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
@@ -467,7 +474,7 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         bufs: dict[str, _CoreDivisionBufferWithCpVars],
         children_of: dict[str, list[tuple[str, list[tuple[int, int]]]]],
     ) -> None:
-        """Minimize HBM transfer traffic, then maximize resident core occupancy.
+        """Minimize HBM transfer traffic, then maximize total core occupancy.
 
         Spilling a buffer forces every consumer that reads it to fetch it back
         from HBM, so the transfer cost of a spill is ``num_consumers *
@@ -477,10 +484,14 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
             minimize  sum_b (child_count_b * size_b * spilled_b) - occupancy
 
         i.e. minimize total HBM traffic and, as a secondary term, maximize total
-        resident core occupancy (prefer the more finely split resident plan).
-        ``size`` is the alignment-unit footprint set in ``plan_layout``; because
-        a real buffer's unit footprint dwarfs the per-buffer occupancy (<=
-        max cores), the traffic term dominates and occupancy only breaks ties.
+        core occupancy. The occupancy sum is over *all* buffers, resident or
+        not: a spilled buffer's division is unconstrained by the slicing gate
+        (its consumers re-read it from HBM and re-slice), so it is free to take
+        its highest-occupancy candidate -- i.e. the most parallel division --
+        and the allocator commits that division too. ``size`` is the
+        alignment-unit footprint set in ``plan_layout``; because a real buffer's
+        unit footprint dwarfs the per-buffer occupancy (<= max cores), the
+        traffic term dominates and occupancy only breaks ties.
 
         Weighting by ``child_count * size`` keeps a heavily read or large
         buffer resident in preference to several cheap ones when capacity
@@ -494,16 +505,10 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
                 # cost incurred only when the buffer is spilled (in_buffer == 0)
                 hbm_terms.append(weight * (1 - sb.in_buffer))
 
-        occ_terms = []
-        for sb in bufs.values():
-            occ_res = model.NewIntVar(
-                0, max(cd.output_partition for cd in sb.buffer.core_divisions), ""
-            )
-            model.Add(occ_res == sb.cores).OnlyEnforceIf(sb.in_buffer)
-            model.Add(occ_res == 0).OnlyEnforceIf(sb.in_buffer.Not())
-            occ_terms.append(occ_res)
-
-        model.Minimize(sum(hbm_terms) - sum(occ_terms))
+        # Occupancy of every buffer counts, resident or not, so the solver picks
+        # a parallelism-optimal division even for spilled buffers.
+        occupancy = sum(sb.cores for sb in bufs.values())
+        model.Minimize(sum(hbm_terms) - occupancy)
 
     # ------------------------------------------------------------------
     # Extract

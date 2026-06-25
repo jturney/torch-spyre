@@ -730,32 +730,22 @@ class CoOptimizingAllocator(ScratchpadAllocator):
         graph: GraphLowering,
         allocation: Sequence[CoreDivisionBuffer],
     ) -> None:
-        """Write the solver's chosen division back to ``op.op_it_space_splits``,
-        for every resident buffer *and every consumer of one* (a consumer reads
-        its resident producer from LX, so it must re-divide to that slicing even
-        when it lives in HBM itself). ``_implicate_core_division`` guarantees a
-        resident producer and its consumers share one slicing, so these commits
-        are consistent. Buffers that neither reside nor read a resident buffer
-        keep their work-division split (all accesses go through HBM, which
-        re-slices on load).
+        """Write the solver's chosen division back to ``op.op_it_space_splits``
+        for *every* buffer the solver assigned one.
+
+        The solver optimizes a core division for all buffers, not just resident
+        ones: a resident producer and its consumers are pinned by
+        ``_implicate_core_division`` to one shared slicing (so those commits are
+        mutually consistent), while a spilled buffer is free of that gate -- its
+        accesses round-trip through HBM, which re-slices on load -- so it takes
+        its most parallel candidate. Committing the spilled buffers' divisions
+        too lets the joint solve optimize work division across the whole graph,
+        not only the LX-resident region.
         """
         op_by_name = {op.name: op for op in graph.operations}
-
-        resident = {b.name for b in allocation if b.address is not None}
-        consumers_of: dict[str, list[str]] = {}
-        for b in allocation:
-            for parent in b.parents:
-                consumers_of.setdefault(parent, []).append(b.name)
-
-        to_commit = set(resident)
-        for name in resident:
-            to_commit.update(consumers_of.get(name, []))
-
-        by_name = {b.name: b for b in allocation}
-        for name in to_commit:
-            buf = by_name.get(name)
-            op = op_by_name.get(name)
-            if buf is None or op is None or buf.chosen_division is None:
+        for buf in allocation:
+            op = op_by_name.get(buf.name)
+            if op is None or buf.chosen_division is None:
                 continue
             cd = buf.core_divisions[buf.chosen_division]
             op.op_it_space_splits = (
