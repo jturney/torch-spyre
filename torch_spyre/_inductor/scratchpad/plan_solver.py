@@ -59,7 +59,7 @@ class CoreDivision:
 
     ``output_splits`` / ``reduction_splits`` are the stride/coeff-keyed encoding
     produced by :func:`pass_utils.splits_by_index_coeff` -- exactly the shape
-    stored in ``op.op_it_space_splits``. ``ILPLayoutSolver`` uses these to size
+    stored in ``op.op_it_space_splits``. ``CpSatLayoutSolver`` uses these to size
     the buffer (per-core footprint = total / ``output_partition``).
     """
 
@@ -99,7 +99,7 @@ class CoreDivision:
 @dataclass
 class CoreDivisionBuffer(LifetimeBoundBuffer):
     """A :class:`LifetimeBoundBuffer` carrying the joint core-division metadata
-    consumed only by :class:`ILPLayoutSolver`.
+    consumed only by :class:`CpSatLayoutSolver`.
 
     The placement-only solvers (greedy/first-fit/best-fit) never look at these
     fields, so they stay on this subclass rather than the shared base.
@@ -137,7 +137,7 @@ def _assert_in_place_relationships(
             )
             # With core_divisions ``size`` is the *total* footprint, so a static
             # size check doesn't apply; the per-core match is enforced against the
-            # chosen division in ``ILPLayoutSolver._add_inplace_relaxation``. Only
+            # chosen division in ``CpSatLayoutSolver._add_inplace_relaxation``. Only
             # the division-fixed case (plain ``LifetimeBoundBuffer``, no
             # ``core_divisions``) keeps the static check.
             if not (
@@ -159,7 +159,7 @@ class MemoryPlanSolver(ABC, Generic[_BufferT]):
     memory layout patterns based on provided sizes, lifetimes.
 
     Parameterized by the buffer type the solver consumes: the placement-only
-    solvers work on :class:`LifetimeBoundBuffer`, while :class:`ILPLayoutSolver`
+    solvers work on :class:`LifetimeBoundBuffer`, while :class:`CpSatLayoutSolver`
     requires the richer :class:`CoreDivisionBuffer`.
     """
 

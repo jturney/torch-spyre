@@ -33,9 +33,6 @@ requires-python = ">=3.11"
 dynamic = ["version"]
 
 [project.optional-dependencies]
-ilp = [ # ILP-based LX layout solver (layout_solver='ilp' / LAYOUT_SOLVER=ilp)
-    "z3-solver",
-]
 cpsat = [ # OR-Tools CP-SAT LX layout solver (layout_solver='cpsat' / LAYOUT_SOLVER=cpsat)
     "ortools",
 ]

@@ -30,11 +30,11 @@ from torch_spyre._inductor import passes
 from torch_spyre._inductor import config as ts_inductor_config
 
 try:
-    import z3  # noqa: F401
+    from ortools.sat.python import cp_model  # noqa: F401
 
-    _HAS_Z3 = True
+    _HAS_ORTOOLS = True
 except ImportError:
-    _HAS_Z3 = False
+    _HAS_ORTOOLS = False
 
 
 Ts = TypeVarTuple("Ts")
@@ -569,17 +569,17 @@ class TestIntermediatePartialReadNotPinned(TestScratchpadUsage):
         )
 
 
-@unittest.skipUnless(_HAS_Z3, "z3-solver not installed")
-class TestIlpAllocatorIntegration(TestScratchpadUsage):
+@unittest.skipUnless(_HAS_ORTOOLS, "ortools not installed")
+class TestCpSatAllocatorIntegration(TestScratchpadUsage):
     """Real-graph coverage for CoOptimizingAllocator.
-    Patching layout_solver="ilp" routes _maybe_scratchpad_planning to
+    Patching layout_solver="cpsat" routes _maybe_scratchpad_planning to
     CoOptimizingAllocator, puts a compiled graph through the
     allocator's translation layer (_division_map /
     _enumerate_core_divisions / _cd_parent_matches / _build_cd_bound_buffers /
     _residency_by_buf) and _commit_divisions.
     """
 
-    def test_pointwise_reduction_chain_ilp(self):
+    def test_pointwise_reduction_chain_cpsat(self):
         # Pointwise producer -> reduction consumer: exercises both branches of
         # _enumerate_core_divisions and a real producer->consumer match edge.
         def model(a, b):
@@ -600,7 +600,7 @@ class TestIlpAllocatorIntegration(TestScratchpadUsage):
                 splits[op.name] = getattr(op, "op_it_space_splits", ({}, {}))
 
         with ts_inductor_config.patch(sencores=32):
-            with ts_inductor_config.patch(layout_solver="ilp"):
+            with ts_inductor_config.patch(layout_solver="cpsat"):
                 with ts_inductor_config.patch(lx_planning=True):
                     with self.pre_scheduling_iterating_pass(visitor):
                         compiled = torch.compile(model, fullgraph=True)
@@ -612,12 +612,12 @@ class TestIlpAllocatorIntegration(TestScratchpadUsage):
             cpu_result,
             atol=0.1,
             rtol=0.1,
-            msg="ilp-allocated result diverged from CPU",
+            msg="cpsat-allocated result diverged from CPU",
         )
         # 2. Residency: rules out an all-spilled degenerate plan.
         self.assertTrue(
             any(loc == "LX" for loc in mem_usages.values()),
-            f"expected >=1 LX buffer under ilp, got {mem_usages}",
+            f"expected >=1 LX buffer under cpsat, got {mem_usages}",
         )
 
         # 3. _commit_divisions wrote a multi-core split onto at least one op.

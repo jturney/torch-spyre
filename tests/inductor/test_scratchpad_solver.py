@@ -24,17 +24,6 @@ from torch_spyre._inductor.scratchpad.plan_solver import (
     LifetimeBoundBuffer,
 )
 
-from torch_spyre._inductor.scratchpad.ilp_solver import (
-    ILPLayoutSolver,
-)
-
-try:
-    import z3  # noqa: F401
-
-    _HAS_Z3 = True
-except ImportError:
-    _HAS_Z3 = False
-
 try:
     from ortools.sat.python import cp_model  # noqa: F401
 
@@ -114,9 +103,9 @@ class BaseLayoutSolverTests:
 
         The placement-only solvers (greedy/first-fit/best-fit) read only the
         fields on :class:`LifetimeBoundBuffer`, so the base suite constructs
-        those. :class:`TestIlpJointDivision` overrides this to emit
+        those. :class:`JointDivisionSolverTests` overrides this to emit
         :class:`CoreDivisionBuffer`s carrying whole-buffer divisions, since the
-        ILP solver requires enumerated core divisions on every buffer.
+        joint solver requires enumerated core divisions on every buffer.
         """
         return LifetimeBoundBuffer(name, size, uses, **kwargs)
 
@@ -126,12 +115,12 @@ class BaseLayoutSolverTests:
     def check_result(self, result, expected_addresses, size, alignment):
         """Assert the solved layout matches the heuristic-solver expectation.
 
-        :class:`TestIlpJointDivision` overrides this: the ILP solver is a
+        :class:`JointDivisionSolverTests` overrides this: the joint solver is a
         satisfiability search, so it returns a *valid* packing rather than the
         specific addresses a gap heuristic picks, and it may evict a different
         buffer when capacity forces a spill. There the check is an invariant
         (no live overlap, within capacity, aligned) plus "places at least as
-        many buffers as the heuristic", which holds because the ILP minimises
+        many buffers as the heuristic", which holds because the solver minimises
         spills.
         """
         result_addresses = [p.address for p in result]
@@ -443,30 +432,29 @@ class TestBestFitLayoutSolver(ScoreOrderingTests, BaseLayoutSolverTests, TestCas
         self.assertEqual(x_addr, 100)
 
 
-@unittest.skipUnless(_HAS_Z3, "z3-solver not installed")
-class TestIlpJointDivision(BaseLayoutSolverTests, TestCase):
-    """Joint core-division solve: the ILP picks each buffer's division from its
-    candidate list while keeping producer/consumer slicing consistent.
+class JointDivisionSolverTests(BaseLayoutSolverTests):
+    """Shared tests for a joint core-division solver: it picks each buffer's
+    division from its candidate list while keeping producer/consumer slicing
+    consistent. This is a mixin (no ``TestCase`` base, so it is not collected on
+    its own); concrete subclasses set ``solver_class``.
 
-    This class also inherits ``BaseLayoutSolverTests``. Those shared tests model
-    flat placement (every live buffer gets an address), which the ILP's
+    It also inherits ``BaseLayoutSolverTests``. Those shared tests model flat
+    placement (every live buffer gets an address), which the joint solver's
     LX-residency model does not: a buffer resides only if a consumer reads it
-    from scratchpad, and the ILP is a satisfiability search that returns *a*
-    valid packing rather than the specific addresses a gap heuristic picks. The
-    overrides below bridge the gap -- ``make_buffer`` emits division-carrying
-    buffers, ``solve`` attaches a synthetic sink so the base buffers are
-    residency-eligible, and ``check_result`` validates the packing is legal and
-    at least as full as the heuristic rather than asserting exact addresses.
+    from scratchpad, and the solver returns *a* valid packing rather than the
+    specific addresses a gap heuristic picks. The overrides below bridge the
+    gap -- ``make_buffer`` emits division-carrying buffers, ``solve`` attaches a
+    synthetic sink so the base buffers are residency-eligible, and
+    ``check_result`` validates the packing is legal and at least as full as the
+    heuristic rather than asserting exact addresses.
     """
 
-    solver_class = ILPLayoutSolver
-
     def make_buffer(self, name, size, uses, **kwargs):
-        # ILP requires every buffer to carry at least one core division; the
-        # base suite's buffers are undivided, so attach the whole-buffer
-        # division. Any in-place / producer edges a base test declares need
-        # matching pairs so the slicing gate permits the merge/residency
-        # (whole <-> whole is the (0, 0) pair).
+        # The joint solver requires every buffer to carry at least one core
+        # division; the base suite's buffers are undivided, so attach the
+        # whole-buffer division. Any in-place / producer edges a base test
+        # declares need matching pairs so the slicing gate permits the
+        # merge/residency (whole <-> whole is the (0, 0) pair).
         edges = set(kwargs.get("in_place_parents", [])) | set(kwargs.get("parents", []))
         matches = {p: [(0, 0)] for p in edges}
         matches.update(kwargs.pop("cd_parent_matches", {}))
@@ -481,14 +469,14 @@ class TestIlpJointDivision(BaseLayoutSolverTests, TestCase):
 
     def solve(self, buffers, size=LARGE_SIZE, alignment=1):
         # The base buffers carry no consumer edges, so under the residency gate
-        # the ILP would force-spill every one of them. Attach a single
+        # the solver would force-spill every one of them. Attach a single
         # synthetic sink that consumes them all, making each residency-eligible.
         # The sink has no consumer of its own, so it is always spilled and
         # occupies nothing; strip it from the returned layout.
         if not buffers:
             return []
         if size // alignment < 1:
-            # Below one alignment unit the ILP's unit-scaled capacity rounds to
+            # Below one alignment unit the solver's unit-scaled capacity rounds to
             # zero and the solver can't represent any placement; the layout is
             # trivially all-spilled, so return the buffers unplaced directly.
             return buffers
@@ -525,8 +513,8 @@ class TestIlpJointDivision(BaseLayoutSolverTests, TestCase):
                 self.assertFalse(
                     _addr_overlap(a, c), f"{a.name} and {c.name} overlap in memory"
                 )
-        # The ILP minimises spills, so it places at least as many buffers as the
-        # heuristic expectation. Below one alignment unit of capacity the ILP's
+        # The solver minimises spilled HBM traffic, so it places at least as many buffers as the
+        # heuristic expectation. Below one alignment unit of capacity the solver's
         # unit model rounds to zero and can't represent any placement, so the
         # count comparison does not apply.
         if size // alignment >= 1:
@@ -665,15 +653,80 @@ class TestIlpJointDivision(BaseLayoutSolverTests, TestCase):
 
 
 @unittest.skipUnless(_HAS_ORTOOLS, "ortools not installed")
-class TestCpSatJointDivision(TestIlpJointDivision):
-    """The OR-Tools CP-SAT solver is a drop-in for the Z3 ``ILPLayoutSolver``:
-    same buffers, same joint-division problem, same lexicographic optimum. It
-    therefore reuses every ``TestIlpJointDivision`` test verbatim -- those go
-    through ``self.solver_class``, so swapping the class here exercises the
-    CP-SAT encoding against the identical expectations (legal packing, spill
-    minimisation, matching-division residency, in-place reuse)."""
+class TestCpSatJointDivision(JointDivisionSolverTests, TestCase):
+    """The OR-Tools CP-SAT joint core-division + LX placement solver. Runs the
+    shared ``JointDivisionSolverTests`` (legal packing, residency under the
+    slicing gate, in-place reuse) via ``self.solver_class``.
+
+    The cases below target CP-SAT-specific encoding details: in-place reuse is
+    modelled by *shortening the parent's lifetime* by the handoff tick under a
+    global ``AddNoOverlap2D``, so they pin down chain-sharing and the degenerate
+    single-use (zero-width) parent."""
 
     solver_class = CpSatLayoutSolver
+
+    def test_inplace_chain_shares_single_slot(self):
+        # A 3-level in-place chain gp -> p -> c (each parent.end_time ==
+        # child.start_time + 1) with whole-only divisions and capacity for just
+        # one 100-byte buffer. gp & p are live together, as are p & c, so
+        # without reuse the peak is 200 and something spills. The only feasible
+        # full-residency plan merges the whole chain onto one shared slot --
+        # exactly what the lifetime-shortening encoding must allow. A sink keeps
+        # the tail residency-eligible.
+        gp = CoreDivisionBuffer("gp", 100, [0, 1], core_divisions=_whole())
+        p = CoreDivisionBuffer(
+            "p", 100, [1, 2], core_divisions=_whole(), in_place_parents=["gp"]
+        )
+        c = CoreDivisionBuffer(
+            "c", 100, [2, 3], core_divisions=_whole(), in_place_parents=["p"]
+        )
+        sink = CoreDivisionBuffer("__sink__", 1, [4], core_divisions=_whole())
+        chain = [gp, p, c, sink]
+        for i in range(1, len(chain)):
+            chain[i].parents = [chain[i - 1].name]
+            chain[i].cd_parent_matches = {chain[i - 1].name: [(0, 0)]}
+        res = {
+            b.name: b
+            for b in self.solver_class(size=150, alignment=1).plan_layout(chain)
+        }
+        # The whole chain resides, sharing one address (the sink spills: no
+        # consumer of its own).
+        for n in ("gp", "p", "c"):
+            self.assertIsNotNone(res[n].address, f"{n} should reside")
+        self.assertEqual(res["gp"].address, res["p"].address)
+        self.assertEqual(res["p"].address, res["c"].address)
+
+    def test_single_use_parent_inplace_zero_width(self):
+        # Degenerate case: the parent has a single use (uses=[0]), so its only
+        # live tick IS the handoff. Shortening it by that tick yields a
+        # zero-width time interval, which the 2D propagator ignores -- the child
+        # still holds the shared slot. The merge must fire (capacity fits only
+        # one 100-byte buffer) and the child must reuse the parent's address.
+        gp = CoreDivisionBuffer("gp", 100, [0], core_divisions=_whole())  # end_time=1
+        c = CoreDivisionBuffer(
+            "c",
+            100,
+            [0, 1],
+            core_divisions=_whole(),
+            in_place_parents=["gp"],
+            parents=["gp"],
+            cd_parent_matches={"gp": [(0, 0)]},
+        )
+        sink = CoreDivisionBuffer(
+            "__sink__",
+            1,
+            [2],
+            core_divisions=_whole(),
+            parents=["c"],
+            cd_parent_matches={"c": [(0, 0)]},
+        )
+        res = {
+            b.name: b
+            for b in self.solver_class(size=150, alignment=1).plan_layout([gp, c, sink])
+        }
+        self.assertIsNotNone(res["gp"].address, "single-use parent should reside")
+        self.assertIsNotNone(res["c"].address, "child should reside")
+        self.assertEqual(res["gp"].address, res["c"].address)
 
 
 class TestGreedyLayoutSolver(BaseLayoutSolverTests, TestCase):

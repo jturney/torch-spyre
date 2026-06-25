@@ -290,15 +290,14 @@ def _distribute_work(graph: GraphLowering) -> None:
 def _maybe_scratchpad_planning(graph: GraphLowering) -> None:
     if not config.lx_planning:
         return
-    # Pick the allocator by solver: the joint solvers (Z3 "ilp" and OR-Tools
-    # "cpsat") run their own joint core-division solve, so they use
-    # CoOptimizingAllocator regardless of the co-opt flag. StrategyB is the
-    # co-optimizing allocator for the gap-based (greedy/bestfit/firstfit)
-    # solvers and is used only when the co-opt flag is set and the solver is not
-    # a joint solver; otherwise allocator stays None (the DefaultAllocator
-    # placement-only path).
+    # Pick the allocator by solver: the CP-SAT solver ("cpsat") runs its own
+    # joint core-division solve, so it uses CoOptimizingAllocator regardless of
+    # the co-opt flag. StrategyB is the co-optimizing allocator for the gap-based
+    # (greedy/bestfit/firstfit) solvers and is used only when the co-opt flag is
+    # set and the solver is not the joint solver; otherwise allocator stays None
+    # (the DefaultAllocator placement-only path).
     allocator: Optional[CoOptimizingAllocator | StrategyBCoOptimizingAllocator] = None
-    if config.layout_solver in ("ilp", "cpsat"):
+    if config.layout_solver == "cpsat":
         allocator = CoOptimizingAllocator()
     elif config.co_optimizing_lx_planning:
         allocator = StrategyBCoOptimizingAllocator()

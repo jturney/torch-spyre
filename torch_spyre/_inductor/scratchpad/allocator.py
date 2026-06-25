@@ -52,8 +52,8 @@ from torch_spyre._inductor.scratchpad.firstfit_bestfit_solver import (
     BestFitLayoutSolver,
     FirstFitLayoutSolver,
 )
-from torch_spyre._inductor.scratchpad.ilp_solver import (
-    ILPLayoutSolver,
+from torch_spyre._inductor.scratchpad.ilp_solver_ortools import (
+    CpSatLayoutSolver,
 )
 from torch_spyre._inductor.scratchpad.passes import (
     ScratchpadOptimizationPass,
@@ -623,25 +623,14 @@ class CoOptimizingAllocator(ScratchpadAllocator):
         pre_optimization_passes: list[ScratchpadOptimizationPass] | None = None,
         post_optimization_passes: list[ScratchpadOptimizationPass] | None = None,
     ):
-        """Joint core-division + LX-placement allocator. The solver is the joint
-        solver selected by ``config.layout_solver`` -- the Z3 ``ILPLayoutSolver``
-        ("ilp") or the OR-Tools ``CpSatLayoutSolver`` ("cpsat") -- sized to
-        available LX memory; both encode the identical joint-division problem.
-        ``pre_optimization_passes`` / ``post_optimization_passes`` (default none)
-        run before / after layout planning.
+        """Joint core-division + LX-placement allocator. The solver is the
+        OR-Tools ``CpSatLayoutSolver`` (``config.layout_solver == "cpsat"``)
+        sized to available LX memory; ``pre_optimization_passes`` /
+        ``post_optimization_passes`` (default none) run before / after layout
+        planning.
         """
         size = int((2 << 20) * (1.0 - config.dxp_lx_frac_avail))
-        layout_planning: MemoryPlanSolver
-        if config.layout_solver == "cpsat":
-            # OR-Tools CP-SAT port of the joint solver -- same model, swappable
-            # for comparison (see ilp_solver_ortools.CpSatLayoutSolver).
-            from torch_spyre._inductor.scratchpad.ilp_solver_ortools import (
-                CpSatLayoutSolver,
-            )
-
-            layout_planning = CpSatLayoutSolver(size)
-        else:
-            layout_planning = ILPLayoutSolver(size)
+        layout_planning: MemoryPlanSolver = CpSatLayoutSolver(size)
 
         if pre_optimization_passes is None:
             pre_optimization_passes = []
