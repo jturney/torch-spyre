@@ -28,8 +28,6 @@ fsspec==2026.2.0
     # via torch
 identify==2.6.16
     # via pre-commit
-idna==3.11
-    # via requests
 immutabledict==4.3.1
     # via ortools
 iniconfig==2.3.0
@@ -57,7 +55,6 @@ numpy==2.4.2
     #   ortools
     #   pandas
     #   torch-spyre
-    #   transformers
 ortools==9.15.6755
     # via torch-spyre
 packaging==26.0
@@ -125,8 +122,6 @@ typing-inspection==0.4.2
     # via pydantic
 tzdata==2026.2 ; sys_platform == 'emscripten' or sys_platform == 'win32'
     # via pandas
-urllib3==2.6.3
-    # via requests
 uv==0.10.5
     # via torch-spyre
 virtualenv==20.39.0
