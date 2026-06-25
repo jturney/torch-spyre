@@ -214,7 +214,7 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
     ) -> tuple[dict[str, int], set[str], dict[str, int]]:
         children_of = self._get_children(tensors)
         self._add_inplace_relaxation(model, tensors)
-        forced = self._add_core_division(model, tensors, children_of)
+        self._add_core_division(model, tensors, children_of)
         self._add_objective(model, tensors, children_of)
 
         solver = cp_model.CpSolver()
@@ -230,8 +230,6 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
                 "[CP-SAT layout solver] tensors=%d forced spills=%d (%s) "
                 "status=%s objective=%s walltime=%.2f ms",
                 len(tensors),
-                len(forced),
-                ", ".join(sorted(forced)) or "none",
                 solver.StatusName(status),
                 solver.ObjectiveValue()
                 if status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
@@ -243,7 +241,6 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
             raise RuntimeError("CP-SAT memory planner found no feasible plan")
 
         return self._extract(solver, tensors)
-
 
     def _add_inplace_relaxation(
         self,
