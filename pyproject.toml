@@ -36,6 +36,9 @@ dynamic = ["version"]
 ilp = [ # ILP-based LX layout solver (layout_solver='ilp' / LAYOUT_SOLVER=ilp)
     "z3-solver",
 ]
+cpsat = [ # OR-Tools CP-SAT LX layout solver (layout_solver='cpsat' / LAYOUT_SOLVER=cpsat)
+    "ortools",
+]
 build = [ # no-isolation build
     # any change here should be reflected in the build system above
     "build",  # only required to build torch_sendnn

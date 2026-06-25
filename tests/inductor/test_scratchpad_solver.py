@@ -35,6 +35,17 @@ try:
 except ImportError:
     _HAS_Z3 = False
 
+try:
+    from ortools.sat.python import cp_model  # noqa: F401
+
+    from torch_spyre._inductor.scratchpad.ilp_solver_ortools import (
+        CpSatLayoutSolver,
+    )
+
+    _HAS_ORTOOLS = True
+except ImportError:
+    _HAS_ORTOOLS = False
+
 from torch_spyre._inductor.scratchpad.firstfit_bestfit_solver import (
     BestFitLayoutSolver,
     FirstFitLayoutSolver,
@@ -571,7 +582,7 @@ class TestIlpJointDivision(BaseLayoutSolverTests, TestCase):
         # parents chain, so P's in-place parents G/N need explicit pairs too.
         buffers_by_name["P"].cd_parent_matches.update({"G": [(0, 0)], "N": [(0, 0)]})
 
-        results = ILPLayoutSolver(size=120, alignment=1).plan_layout(buffers)
+        results = self.solver_class(size=120, alignment=1).plan_layout(buffers)
         results_by_name = {b.name: b for b in results}
         # Every buffer is placed except the consumer-less chain tail TERMINAL.
         self.assertTrue(all(b.address is not None for b in results[:-1]))
@@ -589,7 +600,7 @@ class TestIlpJointDivision(BaseLayoutSolverTests, TestCase):
             CoreDivisionBuffer("y", 60, [1, 2]),
         ]
         with self.assertRaises(AssertionError):
-            ILPLayoutSolver(size=120, alignment=1).plan_layout(plain)
+            self.solver_class(size=120, alignment=1).plan_layout(plain)
 
     def test_picks_matching_division_to_fit(self):
         # Producer P (total 400) feeds consumer C (total 400); both overlap in
@@ -616,7 +627,7 @@ class TestIlpJointDivision(BaseLayoutSolverTests, TestCase):
         )
         result = {
             b.name: b
-            for b in ILPLayoutSolver(size=256, alignment=1).plan_layout([P, C, D])
+            for b in self.solver_class(size=256, alignment=1).plan_layout([P, C, D])
         }
 
         self.assertIsNotNone(result["P"].address)
@@ -632,7 +643,7 @@ class TestIlpJointDivision(BaseLayoutSolverTests, TestCase):
         # A buffer that carries divisions but has no local consumer edge can
         # never match anything, so it is force-spilled even when it would fit.
         leaf = CoreDivisionBuffer("leaf", 40, [0, 1], core_divisions=_divs())
-        result = ILPLayoutSolver(size=256, alignment=1).plan_layout([leaf])
+        result = self.solver_class(size=256, alignment=1).plan_layout([leaf])
         self.assertIsNone(result[0].address)
 
     def test_oversized_min_footprint_is_spilled(self):
@@ -648,9 +659,21 @@ class TestIlpJointDivision(BaseLayoutSolverTests, TestCase):
         )
         result = {
             b.name: b
-            for b in ILPLayoutSolver(size=200, alignment=1).plan_layout([P, C])
+            for b in self.solver_class(size=200, alignment=1).plan_layout([P, C])
         }
         self.assertIsNone(result["P"].address)
+
+
+@unittest.skipUnless(_HAS_ORTOOLS, "ortools not installed")
+class TestCpSatJointDivision(TestIlpJointDivision):
+    """The OR-Tools CP-SAT solver is a drop-in for the Z3 ``ILPLayoutSolver``:
+    same buffers, same joint-division problem, same lexicographic optimum. It
+    therefore reuses every ``TestIlpJointDivision`` test verbatim -- those go
+    through ``self.solver_class``, so swapping the class here exercises the
+    CP-SAT encoding against the identical expectations (legal packing, spill
+    minimisation, matching-division residency, in-place reuse)."""
+
+    solver_class = CpSatLayoutSolver
 
 
 class TestGreedyLayoutSolver(BaseLayoutSolverTests, TestCase):

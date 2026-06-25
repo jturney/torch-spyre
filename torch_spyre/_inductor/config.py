@@ -86,10 +86,12 @@ unroll_loops: bool = os.environ.get("UNROLL_LOOPS", "1") == "1"
 #  "bestfit":  BestFitLayoutSolver,
 #  "firstfit": FirstFitLayoutSolver,
 #  "ilp":      ILPLayoutSolver (Z3 satisfiability placement).
+#  "cpsat":    CpSatLayoutSolver (OR-Tools CP-SAT placement; same model and
+#              joint core-division solve as "ilp", swappable for comparison).
 
 # TODO(isuruf): Change to firstfit when deeptools PR4298 lands
-layout_solver: Literal["greedy", "bestfit", "firstfit", "ilp"] = os.environ.get(
-    "LAYOUT_SOLVER", "greedy"
-)  # type: ignore[assignment]
+layout_solver: Literal["greedy", "bestfit", "firstfit", "ilp", "cpsat"] = (
+    os.environ.get("LAYOUT_SOLVER", "greedy")  # type: ignore[assignment]
+)
 
 install_config_module(sys.modules[__name__])
