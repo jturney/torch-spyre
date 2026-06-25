@@ -35,14 +35,15 @@ constraint model over :class:`CoreDivisionBuffer`s:
   the merge fires, so the parent and its in-place child abut in time and may
   legally share an offset; the single-tick-overlap invariant
   (``_assert_in_place_relationships``) makes this exact (``_add_no_overlap_2d``).
-* **Objective.** Minimize total **HBM transfer traffic** -- spilling a buffer
-  forces each of its consumers to re-read it from HBM, so a spill costs
-  ``num_consumers * size`` -- then maximize total core occupancy:
-  ``minimize sum_b child_count_b * size_b * spilled_b - occupancy``
-  (``_add_objective``). Under capacity pressure this keeps heavily-read / large
-  buffers resident in preference to several cheap ones. The occupancy term sums
-  over *all* buffers, so a spilled buffer (free of the slicing gate) still takes
-  its most parallel division -- which the allocator commits.
+* **Objective** (two-phase lexicographic, in ``_run``). *Residency is the hard
+  priority.* Phase 1 minimizes total **HBM transfer traffic** -- spilling a
+  buffer forces each consumer to re-read it from HBM, so a spill costs
+  ``num_consumers * size`` -- putting as much in LX as possible and choosing
+  whatever division serves that (even no split, if that is what lets a buffer
+  match its consumers and reside). Phase 2 then *holds that residency optimum*
+  and maximizes total core usage (``sum_b cores_b``) so every buffer -- resident
+  or spilled, the latter free of the slicing gate -- takes its most parallel
+  division, which the allocator commits. Parallelism never costs a spill.
 
 After the solve, ``_justify`` slides each in-place-merged placement unit down to
 the lowest free address, squeezing out float gaps without raising the peak.
@@ -165,7 +166,7 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         self,
         size: int,
         alignment: int = 128,
-        time_limit_seconds: float = 10.0,
+        time_limit_seconds: float = 600.0,
         bottom_justify: bool = True,
     ) -> None:
         if cp_model is None:
@@ -222,7 +223,6 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         children_of = self._get_children(tensors)
         self._add_inplace_relaxation(model, tensors)
         self._add_core_division(model, tensors, children_of)
-        self._add_objective(model, tensors, children_of)
 
         solver = cp_model.CpSolver()
         if self._time_limit_seconds:
@@ -230,22 +230,46 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         solver.parameters.num_search_workers = os.cpu_count() or 1
         # Fixed seed so a given worker configuration is reproducible run-to-run.
         solver.parameters.random_seed = 0
+
+        # Two-phase lexicographic objective: residency is the hard priority and
+        # core division is chosen only in service of it.
+        #
+        # Phase 1 -- residency: put as much in LX as possible by minimizing HBM
+        # transfer traffic. Spilling a buffer forces each of its consumers to
+        # re-read it from HBM, so a spill costs ``num_consumers * size``. The
+        # division is whatever maximizes residency -- even no split at all, if
+        # that is what lets a buffer match its consumers and reside.
+        hbm_terms = [
+            len(children_of.get(sb.name, [])) * sb.buffer.size * (1 - sb.in_buffer)
+            for sb in tensors.values()
+            if len(children_of.get(sb.name, [])) * sb.buffer.size
+        ]
+        if hbm_terms:
+            model.Minimize(sum(hbm_terms))
+            if solver.Solve(model) not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+                raise RuntimeError("CP-SAT memory planner found no feasible plan")
+            # Lock in the residency optimum (the traffic value, not just the
+            # count) so phase 2 can never trade a spill for parallelism.
+            model.Add(sum(hbm_terms) <= round(solver.ObjectiveValue()))
+
+        # Phase 2 -- parallelism: holding the residency optimum, maximize total
+        # core usage so every buffer (resident or spilled) takes its most
+        # parallel division.
+        model.Maximize(sum(sb.cores for sb in tensors.values()))
         status = solver.Solve(model)
+        if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            raise RuntimeError("CP-SAT memory planner found no feasible plan")
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "[CP-SAT layout solver] tensors=%d forced spills=%d (%s) "
-                "status=%s objective=%s walltime=%.2f ms",
+                "[CP-SAT layout solver] tensors=%d resident=%d occupancy=%d "
+                "status=%s walltime=%.2f ms",
                 len(tensors),
+                sum(solver.Value(sb.in_buffer) for sb in tensors.values()),
+                round(solver.ObjectiveValue()),
                 solver.StatusName(status),
-                solver.ObjectiveValue()
-                if status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
-                else "n/a",
                 solver.WallTime() * 1e3,
             )
-
-        if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-            raise RuntimeError("CP-SAT memory planner found no feasible plan")
 
         return self._extract(solver, tensors)
 
@@ -467,48 +491,6 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         forced = self._trim_oversized_tensors(model, bufs)
         self._implicate_core_division(model, children_of, bufs)
         return forced
-
-    def _add_objective(
-        self,
-        model: "cp_model.CpModel",
-        bufs: dict[str, _CoreDivisionBufferWithCpVars],
-        children_of: dict[str, list[tuple[str, list[tuple[int, int]]]]],
-    ) -> None:
-        """Minimize HBM transfer traffic, then maximize total core occupancy.
-
-        Spilling a buffer forces every consumer that reads it to fetch it back
-        from HBM, so the transfer cost of a spill is ``num_consumers *
-        buffer_size`` -- the number of producer/consumer (``parents``) edges out
-        of the buffer times its footprint. The objective is
-
-            minimize  sum_b (child_count_b * size_b * spilled_b) - occupancy
-
-        i.e. minimize total HBM traffic and, as a secondary term, maximize total
-        core occupancy. The occupancy sum is over *all* buffers, resident or
-        not: a spilled buffer's division is unconstrained by the slicing gate
-        (its consumers re-read it from HBM and re-slice), so it is free to take
-        its highest-occupancy candidate -- i.e. the most parallel division --
-        and the allocator commits that division too. ``size`` is the
-        alignment-unit footprint set in ``plan_layout``; because a real buffer's
-        unit footprint dwarfs the per-buffer occupancy (<= max cores), the
-        traffic term dominates and occupancy only breaks ties.
-
-        Weighting by ``child_count * size`` keeps a heavily read or large
-        buffer resident in preference to several cheap ones when capacity
-        forces a choice."""
-        hbm_terms = []
-        for sb in bufs.values():
-            # number of producer/consumer edges that would re-read from HBM
-            child_count = len(children_of.get(sb.name, []))
-            weight = child_count * sb.buffer.size
-            if weight:
-                # cost incurred only when the buffer is spilled (in_buffer == 0)
-                hbm_terms.append(weight * (1 - sb.in_buffer))
-
-        # Occupancy of every buffer counts, resident or not, so the solver picks
-        # a parallelism-optimal division even for spilled buffers.
-        occupancy = sum(sb.cores for sb in bufs.values())
-        model.Minimize(sum(hbm_terms) - occupancy)
 
     # ------------------------------------------------------------------
     # Extract
