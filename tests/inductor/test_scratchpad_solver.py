@@ -121,7 +121,7 @@ class BaseLayoutSolverTests:
         buffer when capacity forces a spill. There the check is an invariant
         (no live overlap, within capacity, aligned) plus "places at least as
         many buffers as the heuristic", which holds because the solver minimises
-        spills.
+        HBM transfers.
         """
         result_addresses = [p.address for p in result]
         if isinstance(expected_addresses, set):

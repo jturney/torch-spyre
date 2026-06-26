@@ -114,51 +114,6 @@ class ScratchpadAllocator(ABC):
             )
         )
 
-    def _residency_by_buf(
-        self,
-        graph: GraphLowering,
-        mem_usage: dict,
-        op_by_name: dict[str, Operation],
-        lifetimes: dict[str, list[int]],
-    ) -> dict[str, bool]:
-        """Whether each buffer in ``mem_usage`` may be pinned (resident) in LX.
-
-        Every buffer is handed to the solver so it participates in the slicing
-        match, but participation is not residency. A buffer may be *pinned* only
-        if its producing op clears ``_op_output_good_for_lx_reuse``, has no
-        ExternKernel consumer (extern ops read from HBM), is not the target of an
-        in-place mutation, is off a graph boundary, is read in full (offset reads
-        mis-address a single LX base), and is actually read. Otherwise it stays
-        non-resident so it doesn't orphan its neighbours.
-        """
-        # Targets of a ``MutationLayoutSHOULDREMOVE`` op (e.g. a ``cat`` dest
-        # filled by per-input ``copy_`` slices): the producing op reads nothing
-        # -- its data arrives via offset writes -- so pinning it to one LX base
-        # mis-addresses. The mutating ops are rejected by
-        # ``_op_output_good_for_lx_reuse``, but their target is a normal layout
-        # that would otherwise pass, so exclude it explicitly. Computed once so
-        # the predicate stays linear in the graph.
-        mutated_buffers = {
-            op.layout.target.get_name()
-            for op in graph.operations
-            if isinstance(op.layout, MutationLayoutSHOULDREMOVE)
-        }
-        graph_output_names = set(graph.get_output_names())
-        out: dict[str, bool] = {}
-        for name in mem_usage:
-            op = op_by_name.get(name)
-            uses = lifetimes[name]
-            out[name] = (
-                op is not None
-                and self._op_output_good_for_lx_reuse(op)
-                and not any(isinstance(graph.operations[u], ExternKernel) for u in uses)
-                and name not in mutated_buffers
-                and name not in graph_output_names
-                and not buffer_not_read_in_full(graph, name)
-                and not len(uses) <= 1
-            )
-        return out
-
     def _op_inputs_good_for_lx_inplace(self, op: Any) -> list[str]:
         target = getattr(getattr(op, "origin_node", None), "target", None)
         if target is None:
@@ -678,16 +633,7 @@ class CoOptimizingAllocator(ScratchpadAllocator):
         for p in self.pre_optimization_passes:
             p.apply_pass(graph)
         buffers = self._generate_cd_buffers(graph, self._division_map(graph))
-        try:
-            allocation = self.layout_planning.plan_layout(buffers)
-        except RuntimeError as exc:
-            logger.warning(
-                "cpsat layout solve found no feasible plan (%s); falling back to "
-                "the default greedy allocator.",
-                exc,
-            )
-            self._fallback.plan_allocation(graph)
-            return
+        allocation = self.layout_planning.plan_layout(buffers)
         self._push_allocation(graph, allocation)
         self._commit_divisions(graph, allocation)
         for p in self.post_optimization_passes:
@@ -843,6 +789,51 @@ class CoOptimizingAllocator(ScratchpadAllocator):
                 if inp_i_lay_match and inp_i_eol:
                     allow_inplace[buf_name].append(input_buf)
         return allow_inplace
+
+    def _residency_by_buf(
+        self,
+        graph: GraphLowering,
+        mem_usage: dict,
+        op_by_name: dict[str, Operation],
+        lifetimes: dict[str, list[int]],
+    ) -> dict[str, bool]:
+        """Whether each buffer in ``mem_usage`` may be pinned (resident) in LX.
+
+        Every buffer is handed to the solver so it participates in the slicing
+        match, but participation is not residency. A buffer may be *pinned* only
+        if its producing op clears ``_op_output_good_for_lx_reuse``, has no
+        ExternKernel consumer (extern ops read from HBM), is not the target of an
+        in-place mutation, is off a graph boundary, is read in full (offset reads
+        mis-address a single LX base), and is actually read. Otherwise it stays
+        non-resident so it doesn't orphan its neighbours.
+        """
+        # Targets of a ``MutationLayoutSHOULDREMOVE`` op (e.g. a ``cat`` dest
+        # filled by per-input ``copy_`` slices): the producing op reads nothing
+        # -- its data arrives via offset writes -- so pinning it to one LX base
+        # mis-addresses. The mutating ops are rejected by
+        # ``_op_output_good_for_lx_reuse``, but their target is a normal layout
+        # that would otherwise pass, so exclude it explicitly. Computed once so
+        # the predicate stays linear in the graph.
+        mutated_buffers = {
+            op.layout.target.get_name()
+            for op in graph.operations
+            if isinstance(op.layout, MutationLayoutSHOULDREMOVE)
+        }
+        graph_output_names = set(graph.get_output_names())
+        out: dict[str, bool] = {}
+        for name in mem_usage:
+            op = op_by_name.get(name)
+            uses = lifetimes[name]
+            out[name] = (
+                op is not None
+                and self._op_output_good_for_lx_reuse(op)
+                and not any(isinstance(graph.operations[u], ExternKernel) for u in uses)
+                and name not in mutated_buffers
+                and name not in graph_output_names
+                and not buffer_not_read_in_full(graph, name)
+                and not len(uses) <= 1
+            )
+        return out
 
     def _build_cd_bound_buffers(
         self,
