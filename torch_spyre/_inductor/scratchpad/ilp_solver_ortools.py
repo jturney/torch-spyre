@@ -518,7 +518,9 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         log why each buffer was dropped to HBM. Matching is driven entirely by the
         precomputed ``cd_parent_matches`` pairs."""
         forced = self._trim_oversized_tensors(model, bufs)
-        for name, why in self._implicate_core_division(model, children_of, bufs).items():
+        for name, why in self._implicate_core_division(
+            model, children_of, bufs
+        ).items():
             forced.setdefault(name, why)
         return forced
 
