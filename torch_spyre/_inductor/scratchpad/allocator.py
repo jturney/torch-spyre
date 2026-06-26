@@ -52,9 +52,6 @@ from torch_spyre._inductor.scratchpad.firstfit_bestfit_solver import (
     BestFitLayoutSolver,
     FirstFitLayoutSolver,
 )
-from torch_spyre._inductor.scratchpad.ilp_solver_ortools import (
-    CpSatLayoutSolver,
-)
 from torch_spyre._inductor.scratchpad.passes import (
     ScratchpadOptimizationPass,
 )
@@ -384,6 +381,11 @@ class ScratchpadAllocator(ABC):
         layout.allocation["lx"] = address
 
 
+def _lx_planning_size() -> int:
+    """LX scratchpad bytes available to the layout solver."""
+    return int((2 << 20) * (1.0 - config.dxp_lx_frac_avail))
+
+
 class DefaultAllocator(ScratchpadAllocator):
     def __init__(
         self,
@@ -401,18 +403,11 @@ class DefaultAllocator(ScratchpadAllocator):
             post_optimization_passes: Graph passes applied after layout planning.
                 Defaults to no passes.
         """
-        size = int((2 << 20) * (1.0 - config.dxp_lx_frac_avail))
+        # No config inspection here: the config -> (allocator, solver) mapping
+        # lives in ``select_allocator``. A bare ``DefaultAllocator()`` defaults to
+        # the greedy solver; any other solver is injected explicitly.
         if layout_planning is None:
-            if config.layout_solver == "greedy":
-                layout_planning = GreedyLayoutSolver(size)
-            elif config.layout_solver == "bestfit":
-                layout_planning = BestFitLayoutSolver(size)
-            elif config.layout_solver == "firstfit":
-                layout_planning = FirstFitLayoutSolver(size)
-            else:
-                raise ValueError(
-                    f"Invalid layout_solver config option '{config.layout_solver}'."
-                )
+            layout_planning = GreedyLayoutSolver(_lx_planning_size())
         if pre_optimization_passes is None:
             pre_optimization_passes = []
         if post_optimization_passes is None:
@@ -628,9 +623,15 @@ class CoOptimizingAllocator(ScratchpadAllocator):
         sized to available LX memory; ``pre_optimization_passes`` /
         ``post_optimization_passes`` (default none) run before / after layout
         planning.
+
+        When the CP-SAT solver is unavailable (``ortools`` not installed) or a
+        solve produces no feasible plan, planning falls back to the placement-only
+        :class:`DefaultAllocator` (greedy) so a ``layout_solver="cpsat"`` request
+        degrades to a correct plan instead of aborting the compile. The greedy
+        path does not co-optimize core division, but every op keeps its
+        upstream-chosen division, so the result is correct -- just less optimal.
         """
-        size = int((2 << 20) * (1.0 - config.dxp_lx_frac_avail))
-        layout_planning: MemoryPlanSolver = CpSatLayoutSolver(size)
+        size = _lx_planning_size()
 
         if pre_optimization_passes is None:
             pre_optimization_passes = []
@@ -639,15 +640,54 @@ class CoOptimizingAllocator(ScratchpadAllocator):
 
         self.pre_optimization_passes = pre_optimization_passes
         self.post_optimization_passes = post_optimization_passes
-        self.layout_planning = layout_planning
+
+        # Greedy fallback for when CP-SAT is unavailable or finds no plan.
+        self._fallback = DefaultAllocator(layout_planning=GreedyLayoutSolver(size))
+
+        self.layout_planning: Optional[MemoryPlanSolver]
+        try:
+            # Imported lazily so this module (and the greedy path) load even when
+            # ortools is absent: CpSatLayoutSolver.__init__ raises ImportError
+            # when ortools is missing, which we catch to fall back.
+            from torch_spyre._inductor.scratchpad.ilp_solver_ortools import (
+                CpSatLayoutSolver,
+            )
+
+            self.layout_planning = CpSatLayoutSolver(size)
+        except ImportError as exc:
+            logger.warning(
+                "cpsat layout solver unavailable (%s); falling back to the "
+                "default greedy allocator.",
+                exc,
+            )
+            self.layout_planning = None
 
     def plan_allocation(self, graph: GraphLowering):
         """Run pre-passes, jointly solve core-division + LX placement, commit the
-        chosen divisions, then run post-passes."""
+        chosen divisions, then run post-passes.
+
+        Falls back to the greedy :class:`DefaultAllocator` when the CP-SAT solver
+        is unavailable or fails to find a feasible plan. The fallback is taken
+        before any allocation is pushed or any division committed, so the graph is
+        never left half-planned (the pre-passes default to none and the buffer/
+        division derivation is read-only)."""
+        if self.layout_planning is None:
+            self._fallback.plan_allocation(graph)
+            return
+
         for p in self.pre_optimization_passes:
             p.apply_pass(graph)
         buffers = self._generate_cd_buffers(graph, self._division_map(graph))
-        allocation = self.layout_planning.plan_layout(buffers)
+        try:
+            allocation = self.layout_planning.plan_layout(buffers)
+        except RuntimeError as exc:
+            logger.warning(
+                "cpsat layout solve found no feasible plan (%s); falling back to "
+                "the default greedy allocator.",
+                exc,
+            )
+            self._fallback.plan_allocation(graph)
+            return
         self._push_allocation(graph, allocation)
         self._commit_divisions(graph, allocation)
         for p in self.post_optimization_passes:
@@ -988,6 +1028,44 @@ class CoOptimizingAllocator(ScratchpadAllocator):
         return out
 
 
+_PLACEMENT_SOLVERS: dict[str, type[MemoryPlanSolver]] = {
+    "greedy": GreedyLayoutSolver,
+    "bestfit": BestFitLayoutSolver,
+    "firstfit": FirstFitLayoutSolver,
+}
+
+
+def select_allocator() -> ScratchpadAllocator:
+    """Build the scratchpad allocator and inject its layout solver from config.
+
+    This is the single place that maps config to an (allocator, solver) pair, so
+    the allocators themselves take an explicit solver and never inspect config:
+
+    * ``layout_solver == "cpsat"`` -> joint core-division + LX placement via
+      :class:`CoOptimizingAllocator` (with a built-in greedy fallback). This
+      wins over ``co_optimizing_lx_planning`` because CP-SAT runs its own
+      core-division co-optimization.
+    * ``co_optimizing_lx_planning`` -> gap-based co-optimization via
+      :class:`StrategyBCoOptimizingAllocator`.
+    * otherwise -> placement-only :class:`DefaultAllocator` with the configured
+      gap-based solver (greedy/bestfit/firstfit).
+    """
+    if config.layout_solver == "cpsat":
+        return CoOptimizingAllocator()
+
+    try:
+        solver_cls = _PLACEMENT_SOLVERS[config.layout_solver]
+    except KeyError:
+        raise ValueError(
+            f"Invalid layout_solver config option '{config.layout_solver}'."
+        )
+    solver = solver_cls(_lx_planning_size())
+
+    if config.co_optimizing_lx_planning:
+        return StrategyBCoOptimizingAllocator(layout_planning=solver)
+    return DefaultAllocator(layout_planning=solver)
+
+
 def scratchpad_planning(
     graph: GraphLowering,
     allocator: Optional[ScratchpadAllocator] = None,
@@ -999,8 +1077,9 @@ def scratchpad_planning(
 
     Args:
         graph: Lowered graph to plan scratchpad memory for.
-        allocator: Allocator strategy to use. Defaults to DefaultAllocator.
+        allocator: Allocator strategy to use. Defaults to the config-selected
+            allocator (see :func:`select_allocator`).
     """
     if allocator is None:
-        allocator = DefaultAllocator()
+        allocator = select_allocator()
     allocator.plan_allocation(graph)

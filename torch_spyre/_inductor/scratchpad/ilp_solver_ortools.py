@@ -222,7 +222,7 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
     ) -> tuple[dict[str, int], set[str], dict[str, int]]:
         children_of = self._get_children(tensors)
         self._add_inplace_relaxation(model, tensors)
-        self._add_core_division(model, tensors, children_of)
+        forced_reasons = self._add_core_division(model, tensors, children_of)
 
         solver = cp_model.CpSolver()
         if self._time_limit_seconds:
@@ -260,18 +260,31 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             raise RuntimeError("CP-SAT memory planner found no feasible plan")
 
+        offsets, spilled, chosen_div = self._extract(solver, tensors)
+
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "[CP-SAT layout solver] tensors=%d resident=%d occupancy=%d "
                 "status=%s walltime=%.2f ms",
                 len(tensors),
-                sum(solver.Value(sb.in_buffer) for sb in tensors.values()),
+                len(tensors) - len(spilled),
                 round(solver.ObjectiveValue()),
                 solver.StatusName(status),
                 solver.WallTime() * 1e3,
             )
+            # Per-buffer drop cause: a pre-solve forced reason when we have one,
+            # otherwise the solver chose to spill it (residency gave no benefit,
+            # or there was no room once higher-value buffers were placed).
+            for name in sorted(spilled):
+                logger.debug(
+                    "[CP-SAT layout solver]   %s -> HBM: %s",
+                    name,
+                    forced_reasons.get(
+                        name, "spilled by solver (no residency benefit / no room)"
+                    ),
+                )
 
-        return self._extract(solver, tensors)
+        return offsets, spilled, chosen_div
 
     def _add_inplace_relaxation(
         self,
@@ -434,18 +447,25 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         self,
         model: "cp_model.CpModel",
         bufs: dict[str, _CoreDivisionBufferWithCpVars],
-    ) -> set[str]:
+    ) -> dict[str, str]:
         """Pin out of LX the buffers whose non-residency is fixed up front: those
         whose *smallest* candidate footprint still exceeds capacity, and those
-        marked ``residency_allowed=False``."""
-        forced = set()
+        marked ``residency_allowed=False`` by the allocator. Returns ``name ->
+        reason`` for the buffers it forces out (drop-cause debug logging)."""
+        forced: dict[str, str] = {}
         for sb in bufs.values():
             t = sb.buffer
             min_size = min(
                 int(np.ceil(t.size / cd.output_partition)) for cd in t.core_divisions
             )
-            if min_size > self._capacity_units or not t.residency_allowed:
-                forced.add(t.name)
+            if min_size > self._capacity_units:
+                forced[t.name] = (
+                    f"min per-core footprint {min_size} > LX capacity "
+                    f"{self._capacity_units} (alignment units)"
+                )
+                model.Add(sb.in_buffer == 0)
+            elif not t.residency_allowed:
+                forced[t.name] = "residency not allowed by allocator"
                 model.Add(sb.in_buffer == 0)
         return forced
 
@@ -454,21 +474,28 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         model: "cp_model.CpModel",
         children_of: dict[str, list[tuple[str, list[tuple[int, int]]]]],
         bufs: dict[str, _CoreDivisionBufferWithCpVars],
-    ) -> None:
+    ) -> dict[str, str]:
         """Slicing-consistency gate: a resident buffer's division must match
         *every* consumer's division under the ``cd_parent_matches`` pairs. A
         buffer with no consumer edge, or with a consumer that has no compatible
-        pair, can never reside."""
+        pair, can never reside. Returns ``name -> reason`` for the buffers the
+        gate forces out (drop-cause debug logging)."""
+        forced: dict[str, str] = {}
         for sb in bufs.values():
             t = sb.buffer
             kids = children_of.get(t.name, [])
             if not kids:
                 # Nothing consumes this buffer from LX -> it can never reside.
+                forced.setdefault(t.name, "no consumer reads it from LX")
                 model.Add(sb.in_buffer == 0)
                 continue
             for _child, compatible in kids:
                 if not compatible:
                     # This child can never match -> the buffer cannot reside.
+                    forced.setdefault(
+                        t.name,
+                        f"consumer {_child} has no slicing-compatible core division",
+                    )
                     model.Add(sb.in_buffer == 0)
                     continue
                 pair_lits = []
@@ -478,18 +505,21 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
                     model.Add(bufs[_child].division == j).OnlyEnforceIf(lit)
                     pair_lits.append(lit)
                 model.AddBoolOr(pair_lits).OnlyEnforceIf(sb.in_buffer)
+        return forced
 
     def _add_core_division(
         self,
         model: "cp_model.CpModel",
         bufs: dict[str, _CoreDivisionBufferWithCpVars],
         children_of: dict[str, list[tuple[str, list[tuple[int, int]]]]],
-    ) -> set[str]:
-        """Wire up forced spills and the slicing-match gate. Returns the
-        forced-spill set (for debug logging). Matching is driven entirely by the
+    ) -> dict[str, str]:
+        """Wire up forced spills and the slicing-match gate. Returns ``name ->
+        reason`` for every buffer pinned non-resident up front, so the solve can
+        log why each buffer was dropped to HBM. Matching is driven entirely by the
         precomputed ``cd_parent_matches`` pairs."""
         forced = self._trim_oversized_tensors(model, bufs)
-        self._implicate_core_division(model, children_of, bufs)
+        for name, why in self._implicate_core_division(model, children_of, bufs).items():
+            forced.setdefault(name, why)
         return forced
 
     # ------------------------------------------------------------------

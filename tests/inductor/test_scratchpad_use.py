@@ -631,5 +631,97 @@ class TestCpSatAllocatorIntegration(TestScratchpadUsage):
         )
 
 
+class TestCpSatAllocatorFallback(TestScratchpadUsage):
+    """When ``layout_solver="cpsat"`` is selected but ortools is unavailable, the
+    CoOptimizingAllocator falls back to the greedy DefaultAllocator. The compile
+    must still succeed, still place a buffer in LX, and still match CPU -- which
+    exercises the fallback through the real pipeline rather than asserting on it
+    directly.
+    """
+
+    @contextmanager
+    def _ortools_absent(self):
+        """Force the missing-ortools condition: CpSatLayoutSolver.__init__ raises
+        ImportError (so the allocator falls back) exactly when cp_model is None,
+        which is how a real missing install presents."""
+        from torch_spyre._inductor.scratchpad import ilp_solver_ortools
+
+        saved = ilp_solver_ortools.cp_model
+        ilp_solver_ortools.cp_model = None
+        try:
+            yield
+        finally:
+            ilp_solver_ortools.cp_model = saved
+
+    @override
+    def run_test(self, model, args, **kwargs):
+        cpu_result = model(*(t.to("cpu") for t in args))
+
+        with self._ortools_absent():
+            with ts_inductor_config.patch(layout_solver="cpsat"):
+                with ts_inductor_config.patch(lx_planning=True):
+                    device_result, mem_usages = self.compile_and_collect_mem_usage(
+                        model, args
+                    )
+
+        # The greedy fallback still pins to LX -- a degenerate all-HBM result
+        # would mean the fallback never ran (or did nothing useful).
+        self.assertTrue(
+            any(mem_usage["location"] == "LX" for mem_usage in mem_usages.values()),
+            f"expected the greedy fallback to still use LX, got {mem_usages}",
+        )
+
+        atol = kwargs.get("atol", 1e-4)
+        self.assertTrue(
+            torch.allclose(cpu_result, device_result, atol=atol), "Results do not match"
+        )
+
+
+class TestSelectAllocator(unittest.TestCase):
+    """select_allocator maps config -> (allocator, solver) so the allocators
+    never inspect config themselves. Pure dispatch, no device needed."""
+
+    def test_dispatch_by_config(self):
+        from torch_spyre._inductor.scratchpad.allocator import (
+            CoOptimizingAllocator,
+            DefaultAllocator,
+            StrategyBCoOptimizingAllocator,
+            select_allocator,
+        )
+        from torch_spyre._inductor.scratchpad.plan_solver import GreedyLayoutSolver
+        from torch_spyre._inductor.scratchpad.firstfit_bestfit_solver import (
+            BestFitLayoutSolver,
+        )
+
+        with ts_inductor_config.patch(
+            layout_solver="greedy", co_optimizing_lx_planning=False
+        ):
+            a = select_allocator()
+            self.assertIs(type(a), DefaultAllocator)
+            self.assertIsInstance(a.layout_planning, GreedyLayoutSolver)
+
+        with ts_inductor_config.patch(
+            layout_solver="bestfit", co_optimizing_lx_planning=False
+        ):
+            a = select_allocator()
+            self.assertIs(type(a), DefaultAllocator)
+            self.assertIsInstance(a.layout_planning, BestFitLayoutSolver)
+
+        with ts_inductor_config.patch(
+            layout_solver="greedy", co_optimizing_lx_planning=True
+        ):
+            self.assertIsInstance(select_allocator(), StrategyBCoOptimizingAllocator)
+
+        # cpsat routes to the joint allocator and must not raise (footgun fix).
+        with ts_inductor_config.patch(layout_solver="cpsat"):
+            self.assertIsInstance(select_allocator(), CoOptimizingAllocator)
+
+        with ts_inductor_config.patch(
+            layout_solver="bogus", co_optimizing_lx_planning=False
+        ):
+            with self.assertRaises(ValueError):
+                select_allocator()
+
+
 if __name__ == "__main__":
     unittest.main()

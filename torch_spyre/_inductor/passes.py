@@ -64,8 +64,6 @@ from .work_division import (
 )
 from .pass_utils import apply_splits_from_index_coeff, iteration_space_from_op
 from .scratchpad.allocator import (
-    StrategyBCoOptimizingAllocator,
-    CoOptimizingAllocator,
     scratchpad_planning,
 )
 from .fusion import spyre_fuse_nodes
@@ -290,18 +288,9 @@ def _distribute_work(graph: GraphLowering) -> None:
 def _maybe_scratchpad_planning(graph: GraphLowering) -> None:
     if not config.lx_planning:
         return
-    # Pick the allocator by solver: the CP-SAT solver ("cpsat") runs its own
-    # joint core-division solve, so it uses CoOptimizingAllocator regardless of
-    # the co-opt flag. StrategyB is the co-optimizing allocator for the gap-based
-    # (greedy/bestfit/firstfit) solvers and is used only when the co-opt flag is
-    # set and the solver is not the joint solver; otherwise allocator stays None
-    # (the DefaultAllocator placement-only path).
-    allocator: Optional[CoOptimizingAllocator | StrategyBCoOptimizingAllocator] = None
-    if config.layout_solver == "cpsat":
-        allocator = CoOptimizingAllocator()
-    elif config.co_optimizing_lx_planning:
-        allocator = StrategyBCoOptimizingAllocator()
-    scratchpad_planning(graph, allocator=allocator)
+    # The allocator (and its layout solver) is selected from config by
+    # scratchpad_planning -> select_allocator; no allocator wiring here.
+    scratchpad_planning(graph)
 
 
 class CustomPreSchedulingPasses:
