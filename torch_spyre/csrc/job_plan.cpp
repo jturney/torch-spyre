@@ -23,9 +23,89 @@
 
 #include "spyre_allocator.h"
 #include "spyre_stream.h"
+#include "spyre_tensor_impl.h"
 #include "util/processSpyreCodeArtifacts.h"
 
 namespace spyre {
+
+namespace {
+// A view tensor shares its parent storage's composite_addr (the parent base);
+// the per-view element offset lives only in tensor.storage_offset(). The kernel
+// launch must fold that offset into the device address, otherwise every view
+// reads the parent base (e.g. all unbind slices read slice 0).
+//
+// storage_offset is a flat HOST (logical) offset; the device storage is tiled,
+// so it does NOT map linearly to device bytes -- the tiling reorders sticks.
+// The translation uses the view's physical layout
+// (SpyreTensorImpl::spyre_layout, which is the layout the storage was written
+// with, i.e. the parent's tiling): decompose the host offset into device
+// coordinates via stride_map (each stride_map[d] is the host stride of device
+// dim d) and accumulate device contiguous strides. A stick is 128 bytes;
+// whole-stick offsets (non-stick selects) land stick-aligned, sub-stick offsets
+// (a select/unbind along the stick dim) do not and are rejected (Phase 2 /
+// restickify).
+constexpr int64_t kStickBytes = 128;
+
+int64_t view_device_byte_offset(const at::Tensor& tensor) {
+  const int64_t offset_elems = tensor.storage_offset();
+  if (offset_elems == 0) {
+    return 0;
+  }
+  const auto* impl =
+      static_cast<const SpyreTensorImpl*>(tensor.unsafeGetTensorImpl());
+  const std::vector<int64_t>& dsize = impl->spyre_layout.device_size;
+  const std::vector<int64_t>& smap = impl->spyre_layout.stride_map;
+  const int rank = static_cast<int>(dsize.size());
+  TORCH_CHECK(static_cast<int>(smap.size()) == rank,
+              "Spyre: device_size/stride_map rank mismatch");
+
+  // Device contiguous strides (in elements): the device storage is laid out
+  // contiguously in device_size order.
+  std::vector<int64_t> dstride(rank, 1);
+  for (int d = rank - 2; d >= 0; --d) {
+    dstride[d] = dstride[d + 1] * dsize[d + 1];
+  }
+
+  int64_t elem_off = 0;
+  for (int d = 0; d < rank; ++d) {
+    if (dsize[d] <= 1 || smap[d] == 0) {
+      continue;
+    }
+    const int64_t coord = (offset_elems / smap[d]) % dsize[d];
+    elem_off += coord * dstride[d];
+  }
+  const int64_t byte_off = elem_off * tensor.element_size();
+  TORCH_CHECK(
+      byte_off % kStickBytes == 0,
+      "Spyre: kernel input has a sub-stick view offset (storage_offset ",
+      offset_elems, " elems -> ", byte_off,
+      " device bytes, stick = ", kStickBytes,
+      "); only stick-aligned view offsets are supported (a select/"
+      "unbind along the stick dimension is not yet supported).");
+  return byte_off;
+}
+
+const flex::CompositeAddress& base_composite_address(const at::Tensor& tensor) {
+  return static_cast<SharedOwnerCtx*>(tensor.storage().data_ptr().get_context())
+      ->composite_addr;
+}
+
+// Build a single-chunk composite address shifted by byte_off (>0). The
+// no-offset path passes the base by reference instead (CompositeAddress has a
+// deleted copy ctor, and the base may be multi-chunk).
+flex::CompositeAddress shifted_composite_address(
+    const flex::CompositeAddress& base, int64_t byte_off) {
+  TORCH_CHECK(base.chunks().size() == 1,
+              "Spyre: offset view on an interleaved composite address is not "
+              "supported");
+  const auto& base_chunk = base.chunks()[0];
+  flex::LogicalAddress shifted_addr(base_chunk.addr.region_id,
+                                    base_chunk.addr.offset + byte_off);
+  flex::Chunk shifted_chunk(shifted_addr, base.total_size() - byte_off,
+                            base_chunk.domain_id);
+  return flex::CompositeAddress(shifted_chunk);
+}
+}  // namespace
 
 void JobPlanStepH2D::construct(LaunchContext&,
                                const SpyreStream& stream) const {
@@ -66,13 +146,20 @@ void JobPlanStepD2H::write(std::ostream& os) const {
 void JobPlanStepCompute::construct(LaunchContext& ctx,
                                    const SpyreStream& stream) const {
   std::vector<const flex::CompositeAddress*> tensor_allocs;
+  // Backs the offset-shifted addresses below; reserved so push_back never
+  // reallocates and invalidates the pointers held in tensor_allocs.
+  std::vector<flex::CompositeAddress> owned_addrs;
   if (bind_io_addresses_) {
+    owned_addrs.reserve(ctx.inputs_outputs.size());
     for (auto& tensor : ctx.inputs_outputs) {
-      flex::CompositeAddress* address =
-          &(static_cast<SharedOwnerCtx*>(
-                tensor.storage().data_ptr().get_context())
-                ->composite_addr);
-      tensor_allocs.push_back(address);
+      const flex::CompositeAddress& base = base_composite_address(tensor);
+      const int64_t byte_off = view_device_byte_offset(tensor);
+      if (byte_off == 0) {
+        tensor_allocs.push_back(&base);
+      } else {
+        owned_addrs.push_back(shifted_composite_address(base, byte_off));
+        tensor_allocs.push_back(&owned_addrs.back());
+      }
     }
   }
   auto* params = flex::createComputeParams(
@@ -139,9 +226,12 @@ void JobPlanStepHostCompute::construct(LaunchContext& ctx,
   std::vector<int64_t> addresses(ctx.inputs_outputs.size());
   int addr_idx = 0;
   for (auto& tensor : ctx.inputs_outputs) {
-    int64_t addr = composite_address_to_dmva(
-        (static_cast<SharedOwnerCtx*>(tensor.storage().data_ptr().get_context())
-             ->composite_addr));
+    const flex::CompositeAddress& base = base_composite_address(tensor);
+    const int64_t byte_off = view_device_byte_offset(tensor);
+    int64_t addr = byte_off == 0
+                       ? composite_address_to_dmva(base)
+                       : composite_address_to_dmva(
+                             shifted_composite_address(base, byte_off));
     addresses[addr_idx++] = addr;
   }
 
