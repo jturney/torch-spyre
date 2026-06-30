@@ -52,7 +52,6 @@ from torch_spyre._inductor.scratchpad.passes import (
 )
 from torch_spyre._inductor.scratchpad.utils import (
     OP_OUTPUT_GOOD_FOR_LX_REUSE,
-    OP_GOOD_FOR_LX_INPLACE,
     buffer_not_read_in_full,
     clone_at_graph_boundaries,
     mem_usage_by_buf,
