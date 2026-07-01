@@ -42,6 +42,7 @@ from .temp_passes import (
     bmm_unflatten_pass,
     mark_direct_unit_bmm_pass,
     mm_to_bmm_pass,
+    reroute_stick_misaligned_reshapes,
 )
 from .coarse_tile import (
     hints_to_coarse_tile_groups,
@@ -218,6 +219,11 @@ class CustomPostPasses(_SpyreGraphPassPipeline):
                 mm_to_bmm_pass.apply,
                 mark_direct_unit_bmm_pass,
                 bmm_unflatten_pass.apply,
+                # After the mm/bmm reshape rewrites: send any remaining
+                # stick-misaligned reshape that feeds an on-device op through a
+                # CPU round-trip so it does not hit an unsupported stick
+                # expression in propagate_layouts.
+                reroute_stick_misaligned_reshapes,
             ]
         )
 

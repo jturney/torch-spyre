@@ -35,6 +35,7 @@ from torch._inductor.ir import (
 from torch._inductor.virtualized import V
 from torch_spyre._C import SpyreTensorLayout
 from .pass_utils import compute_restickify_needed, device_coordinates, host_coordinates
+from .errors import Unsupported
 
 INF = math.inf
 
@@ -82,9 +83,21 @@ class EdgeCostMap:
 
         Cost is 0 if stick-compatible, the input element count if restickifiable, or INF if infeasible.
         """
-        needed, tgt = compute_restickify_needed(
-            in_stl, self._dep_layout, self.dep, target_stl, self._target_dep, self._op
-        )
+        try:
+            needed, tgt = compute_restickify_needed(
+                in_stl,
+                self._dep_layout,
+                self.dep,
+                target_stl,
+                self._target_dep,
+                self._op,
+            )
+        except Unsupported:
+            # A candidate layout whose access is not a representable stick
+            # expression is simply infeasible for this op; prune it (INF) rather
+            # than aborting the whole optimization. Some other candidate (e.g. a
+            # stick-aligned one produced upstream by reshape_via_cpu) will win.
+            needed, tgt = True, None
         if not needed:
             cost = 0.0
         elif tgt is None:

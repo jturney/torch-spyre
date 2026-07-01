@@ -14,6 +14,8 @@
 
 # This file contains inductor passes that are only needed as temp fixes
 
+import warnings
+
 import torch
 from torch._inductor.pattern_matcher import (
     Arg,
@@ -25,6 +27,7 @@ from torch._inductor.pattern_matcher import (
 from .logging_utils import get_inductor_logger
 from .constants import SHARED_WEIGHT_UNIT_BMM_CUSTOM_META_KEY
 from .pass_utils import copy_fx_custom_meta
+from ..ops.fallbacks import FallbackWarning
 
 aten = torch.ops.aten
 
@@ -56,6 +59,129 @@ def _is_static_multiple(value, divisor: int) -> bool:
 
 def _has_stick_aligned_matmul_dims(k, n) -> bool:
     return _is_static_multiple(k, 64) and _is_static_multiple(n, 64)
+
+
+def _static_int(value):
+    """Return ``int(value)`` or None if it is symbolic / not convertible."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _node_static_shape(node) -> "list | None":
+    """Static shape of ``node``'s fake value, or None if unavailable/symbolic."""
+    if not isinstance(node, torch.fx.Node):
+        return None
+    val = node.meta.get("val")
+    if val is None or not hasattr(val, "shape"):
+        return None
+    return list(val.shape)
+
+
+# Spyre stick is 128 bytes; elems_per_stick depends on dtype width.
+_STICK_BYTES = 128
+
+
+def _elems_per_stick(node) -> "int | None":
+    """Elements per 128-byte stick for ``node``'s dtype, or None if unknown."""
+    val = node.meta.get("val") if isinstance(node, torch.fx.Node) else None
+    dtype = getattr(val, "dtype", None)
+    if dtype is None:
+        return None
+    try:
+        return _STICK_BYTES // torch.empty(0, dtype=dtype).element_size()
+    except (TypeError, RuntimeError):
+        return None
+
+
+def _reshape_changes_innermost(node: torch.fx.Node) -> bool:
+    """True for a reshape/view that changes the innermost (stick) dimension.
+
+    A reshape that preserves the innermost dim size (e.g. a matmul batch-collapse
+    ``[B, M, K] -> [B*M, K]``) keeps every element in the same stick, so it needs
+    no data movement. When the innermost size changes, the new element->stick
+    mapping produces a stick expression the backend cannot address (rejected by
+    ``_check_stick_expr_supported`` in propagate_layouts), so it must be
+    materialized off-device. Symbolic shapes return False (leave dynamic alone).
+    """
+    if node.op != "call_function" or node.target not in _RESHAPE_OPS:
+        return False
+    if not node.args:
+        return False
+    in_shape = _node_static_shape(node.args[0])
+    out_shape = _node_static_shape(node)
+    if not in_shape or not out_shape:
+        return False
+    in_inner = _static_int(in_shape[-1])
+    out_inner = _static_int(out_shape[-1])
+    if in_inner is None or out_inner is None:
+        return False
+    if in_inner == out_inner:
+        return False
+    # A size-1 innermost is a degenerate squeeze/unsqueeze (e.g. (67,256,1) ->
+    # (1,67,256)), not a real stick change -- it is representable and must not be
+    # materialized (doing so corrupts the data). Skip it.
+    if in_inner <= 1 or out_inner <= 1:
+        return False
+    # Otherwise representable iff BOTH innermosts are stick-aligned (multiples of
+    # elems_per_stick): the reshape stays on stick boundaries, so no cross-stick
+    # gather is needed (e.g. a 384 -> 64 split, or a 64 -> 128 merge of full
+    # sticks). If either side is a partial stick, the reindex crosses a padded
+    # stick boundary and needs a gather -> materialize.
+    eps = _elems_per_stick(node)
+    if eps is None:
+        return False
+    return in_inner % eps != 0 or out_inner % eps != 0
+
+
+def _consumed_on_device(node: torch.fx.Node) -> bool:
+    """True if any user of ``node`` is a real op (not just the graph output).
+
+    A reshape whose only use is the graph output is materialized during the
+    device->host copy (the host applies the reindex for free), so it does not
+    need the CPU round-trip. Only reshapes feeding another on-device op do.
+    """
+    return any(user.op != "output" for user in node.users)
+
+
+def reroute_stick_misaligned_reshapes(graph: torch.fx.Graph) -> None:
+    """Route stick-misaligned reshapes through the CPU round-trip fallback.
+
+    A reshape/view that changes the innermost (stick) dimension and is then
+    consumed by an on-device op would fail in propagate_layouts with an
+    unsupported stick expression. Rewrite it to ``spyre.reshape_via_cpu`` so the
+    consumer receives a stick-aligned tensor. This is a correctness fallback with
+    a device<->host copy cost, so each rewrite emits a ``FallbackWarning`` naming
+    the shapes. Runs after the mm/bmm passes, so matmul batch-reshapes (which
+    preserve the innermost dim and so are never matched here) are untouched.
+    """
+    for node in list(graph.nodes):
+        if not _reshape_changes_innermost(node):
+            continue
+        if not _consumed_on_device(node):
+            continue
+        inp = node.args[0]
+        out_shape_raw = _node_static_shape(node)
+        in_shape = _node_static_shape(inp)
+        if out_shape_raw is None or in_shape is None:
+            continue  # guarded by _reshape_changes_innermost, but narrow for mypy
+        out_shape = [int(s) for s in out_shape_raw]
+        with graph.inserting_after(node):
+            new_node = graph.call_function(
+                torch.ops.spyre.reshape_via_cpu.default, (inp, out_shape)
+            )
+        new_node.meta.update(node.meta)
+        copy_fx_custom_meta(node, new_node)
+        node.replace_all_uses_with(new_node)
+        graph.erase_node(node)
+        warnings.warn(
+            f"stick-misaligned reshape {tuple(in_shape)} -> {tuple(out_shape)} "
+            "routed through a CPU round-trip (spyre.reshape_via_cpu): correctness "
+            "fallback with a device<->host copy cost",
+            category=FallbackWarning,
+        )
+    graph.lint()
 
 
 def _node_shape(node: torch.fx.Node) -> list[int] | None:
