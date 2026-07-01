@@ -34,6 +34,60 @@
 
 namespace spyre {
 
+namespace {
+// A reshape/view that changes the innermost (stick) dimension is stick-layout
+// incompatible on Spyre: the new element->stick mapping needs a cross-stick
+// gather the device addressing model cannot express (the same gap that makes
+// flatten/reshape fail when consumed by a compute kernel). Until an on-device
+// restickify gather exists, materialize such a view through a CPU round-trip --
+// the same stopgap the resize_ reallocate path uses (spyre_mem.cpp Case 3) --
+// so downstream kernels receive a stick-aligned tensor.
+//
+// This gives up view aliasing for these specific views, which is unavoidable: a
+// stick-incompatible reshape can never be a correct device alias (the data is
+// not physically tiled that way), so materializing is strictly better than
+// returning an unreadable alias.
+constexpr int64_t kStickBytes = 128;
+
+bool reshape_changes_stick_dim(const at::Tensor& self,
+                               c10::IntArrayRef new_size) {
+  if (self.dim() == 0 || new_size.empty()) {
+    return false;
+  }
+  const int64_t old_inner = self.size(self.dim() - 1);
+  const int64_t new_inner = new_size.back();
+  if (new_inner == old_inner) {
+    return false;
+  }
+  // A size-1 innermost is a degenerate squeeze/unsqueeze (e.g. (67,256,1) ->
+  // (1,67,256)), not a real stick change -- it is representable and must not be
+  // materialized (doing so corrupts the data). Skip it.
+  if (old_inner <= 1 || new_inner <= 1) {
+    return false;
+  }
+  // Otherwise representable iff BOTH innermosts are stick-aligned (multiples of
+  // elems_per_stick): the reshape stays on stick boundaries, so no cross-stick
+  // gather is needed (e.g. a 384 -> 64 split, or a 64 -> 128 merge of full
+  // sticks). If either side is a partial stick, the reindex crosses a padded
+  // stick boundary and needs a gather -> materialize.
+  const int64_t elems_per_stick = kStickBytes / self.element_size();
+  if (elems_per_stick <= 0) {
+    return false;
+  }
+  return old_inner % elems_per_stick != 0 || new_inner % elems_per_stick != 0;
+}
+
+at::Tensor materialize_reshape_via_cpu(const at::Tensor& self,
+                                       c10::IntArrayRef new_size) {
+  TORCH_WARN_ONCE(
+      "Spyre: stick-incompatible reshape/view (innermost ",
+      self.size(self.dim() - 1), " -> ", new_size.back(),
+      ") materialized via a CPU round-trip; correctness fallback with a "
+      "device<->host copy cost until an on-device restickify gather exists.");
+  return self.cpu().reshape(new_size).to(self.device());
+}
+}  // namespace
+
 //
 // templated for ArrayRef<int64_t> and SmallVector<int64_t> use cases
 //
@@ -89,6 +143,9 @@ static at::Tensor spyre_alias_with_sizes_and_strides(
 static inline at::Tensor spyre_view_impl(const at::Tensor& self,
                                          c10::IntArrayRef size) {
   c10::DimVector inferred_size = at::infer_size_dv(size, self.numel());
+  if (reshape_changes_stick_dim(self, inferred_size)) {
+    return materialize_reshape_via_cpu(self, inferred_size);
+  }
   auto stride =
       at::detail::computeStride(self.sizes(), self.strides(), inferred_size);
   TORCH_CHECK(
@@ -110,6 +167,9 @@ at::Tensor spyre__unsafe_view(const at::Tensor& self, c10::IntArrayRef size) {
 
 at::Tensor spyre_reshape_alias(const at::Tensor& self, c10::IntArrayRef sizes,
                                c10::IntArrayRef strides) {
+  if (reshape_changes_stick_dim(self, sizes)) {
+    return materialize_reshape_via_cpu(self, sizes);
+  }
   return spyre_alias_with_sizes_and_strides(self, sizes, strides);
 }
 
