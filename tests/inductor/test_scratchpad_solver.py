@@ -728,6 +728,35 @@ class TestCpSatJointDivision(JointDivisionSolverTests, TestCase):
         self.assertIsNotNone(res["c"].address, "child should reside")
         self.assertEqual(res["gp"].address, res["c"].address)
 
+    def test_spill_reasons_recorded(self):
+        # The solver records a per-buffer drop cause for every spilled buffer so
+        # the allocator can report why each landed in HBM. `leaf` has divisions
+        # but no consumer edge (forced out by the residency gate); `big`'s
+        # smallest footprint exceeds capacity (forced out up front).
+        leaf = CoreDivisionBuffer("leaf", 40, [0, 1], core_divisions=_whole())
+        big = CoreDivisionBuffer(
+            "big", 1000, [0, 1], core_divisions=[CoreDivision(output_splits={256: 4})]
+        )
+        C = CoreDivisionBuffer(
+            "C",
+            100,
+            [1, 2],
+            core_divisions=[CoreDivision(output_splits={256: 4})],
+            parents=["big"],
+        )
+        solver = self.solver_class(size=200, alignment=1)
+        result = {b.name: b for b in solver.plan_layout([leaf, big, C])}
+
+        # All three spill; each carries a reason keyed by buffer name.
+        self.assertIsNone(result["big"].address)
+        self.assertIn("big", solver.spill_reasons)
+        self.assertIn("capacity", solver.spill_reasons["big"])
+        self.assertIn("leaf", solver.spill_reasons)
+        self.assertIn("no consumer", solver.spill_reasons["leaf"])
+        # A resident buffer gets no spill reason.
+        for name, buf in result.items():
+            self.assertEqual(buf.address is None, name in solver.spill_reasons)
+
 
 class TestGreedyLayoutSolver(BaseLayoutSolverTests, TestCase):
     solver_class = GreedyLayoutSolver

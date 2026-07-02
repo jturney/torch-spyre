@@ -1097,6 +1097,7 @@ class CoOptimizingAllocator(ScratchpadAllocator):
         path does not co-optimize core division, but every op keeps its
         upstream-chosen division, so the result is correct -- just less optimal.
         """
+        super().__init__()
         size = _lx_planning_size()
 
         if pre_optimization_passes is None:
@@ -1137,6 +1138,7 @@ class CoOptimizingAllocator(ScratchpadAllocator):
         before any allocation is pushed or any division committed, so the graph is
         never left half-planned (the pre-passes default to none and the buffer/
         division derivation is read-only)."""
+        self.reject_reasons = {}
         if self.layout_planning is None:
             self._fallback.plan_allocation(graph)
             return
@@ -1149,6 +1151,12 @@ class CoOptimizingAllocator(ScratchpadAllocator):
         self._commit_divisions(graph, allocation)
         for p in self.post_optimization_passes:
             p.apply_pass(graph)
+
+        # Surface the solver's per-buffer spill causes so the LX-pinning debug
+        # log reports why each buffer landed in HBM, on par with the other
+        # allocators. ``getattr`` because only ``CpSatLayoutSolver`` exposes it.
+        self.reject_reasons = dict(getattr(self.layout_planning, "spill_reasons", {}))
+        self._log_lx_pinning(graph)
 
     def _division_map(self, graph: GraphLowering) -> dict[str, list[CoreDivision]]:
         """Per-op core-division candidates for the joint-division solve.
@@ -1309,16 +1317,24 @@ class CoOptimizingAllocator(ScratchpadAllocator):
         mem_usage: dict,
         op_by_name: dict[str, Operation],
         lifetimes: dict[str, list[int]],
-    ) -> dict[str, bool]:
-        """Whether each buffer in ``mem_usage`` may be pinned (resident) in LX.
+    ) -> dict[str, Optional[str]]:
+        """Per-buffer residency verdict: ``None`` if the buffer may be pinned
+        (resident) in LX, else the reason it may not.
 
         Every buffer is handed to the solver so it participates in the slicing
         match, but participation is not residency. A buffer may be *pinned* only
         if its producing op clears ``_op_output_good_for_lx_reuse``, has no
         ExternKernel consumer (extern ops read from HBM), is not the target of an
         in-place mutation, is off a graph boundary, is read in full (offset reads
-        mis-address a single LX base), and is actually read. Otherwise it stays
-        non-resident so it doesn't orphan its neighbours.
+        mis-address a single LX base), would not produce a backGapCore_ (the
+        backend supports backGap for HBM but not LX), and is actually read.
+        Otherwise it stays non-resident (carrying the reason) so it doesn't
+        orphan its neighbours. The reason strings mirror the ``DefaultAllocator``
+        ``reject_reasons`` vocabulary where the checks overlap.
+
+        Note: core-division consistency is *not* pre-filtered here (unlike the
+        gap allocators' "core div mismatch" drop); the joint solver enforces it
+        via the ``cd_parent_matches`` slicing gate instead.
         """
         # Targets of a ``MutationLayoutSHOULDREMOVE`` op (e.g. a ``cat`` dest
         # filled by per-input ``copy_`` slices): the producing op reads nothing
@@ -1333,20 +1349,46 @@ class CoOptimizingAllocator(ScratchpadAllocator):
             if isinstance(op.layout, MutationLayoutSHOULDREMOVE)
         }
         graph_output_names = set(graph.get_output_names())
-        out: dict[str, bool] = {}
-        for name in mem_usage:
-            op = op_by_name.get(name)
-            uses = lifetimes[name]
-            out[name] = (
-                op is not None
-                and self._op_output_good_for_lx_reuse(op)
-                and not any(isinstance(graph.operations[u], ExternKernel) for u in uses)
-                and name not in mutated_buffers
-                and name not in graph_output_names
-                and not buffer_not_read_in_full(graph, name)
-                and not len(uses) <= 1
+        return {
+            name: self._residency_reason(
+                graph,
+                op_by_name.get(name),
+                name,
+                lifetimes[name],
+                mutated_buffers,
+                graph_output_names,
             )
-        return out
+            for name in mem_usage
+        }
+
+    def _residency_reason(
+        self,
+        graph: GraphLowering,
+        op: Optional[Operation],
+        name: str,
+        uses: list[int],
+        mutated_buffers: set[str],
+        graph_output_names: set[str],
+    ) -> Optional[str]:
+        """The first check ``name`` fails (the reason it may not reside), or
+        ``None`` if it clears them all. Order matters: the back-gap probe (last)
+        touches ``device_layout``, so the earlier guards ensure it only runs on a
+        non-mutation ``ComputedBuffer`` that is read in full."""
+        if op is None or not self._op_output_good_for_lx_reuse(op):
+            return "op not allowed"
+        if any(isinstance(graph.operations[u], ExternKernel) for u in uses):
+            return "extern kernel user"
+        if name in mutated_buffers:
+            return "mutation target"
+        if name in graph_output_names:
+            return "graph output"
+        if buffer_not_read_in_full(graph, name):
+            return "partial/offset read"
+        if len(uses) <= 1:
+            return "single use"
+        if _would_produce_lx_back_gap(graph, name, uses):
+            return "lx back gap"
+        return None
 
     def _build_cd_bound_buffers(
         self,
@@ -1381,7 +1423,7 @@ class CoOptimizingAllocator(ScratchpadAllocator):
             uses = lifetimes[output_name]
 
             op = op_by_name.get(output_name)
-            residency_allowed = residency_by_buf[output_name]
+            residency_reason = residency_by_buf[output_name]
 
             buf_divisions = divisions[output_name]
             parents = in_place.get(output_name, [])
@@ -1407,7 +1449,7 @@ class CoOptimizingAllocator(ScratchpadAllocator):
                     core_divisions=buf_divisions,
                     parents=parent_proj,
                     cd_parent_matches=cd_parent_matches,
-                    residency_allowed=residency_allowed,
+                    residency_reason=residency_reason,
                 )
             )
 
@@ -1421,7 +1463,7 @@ class CoOptimizingAllocator(ScratchpadAllocator):
         divisions: dict[str, list[CoreDivision]],
         op_by_name: dict[str, Operation],
         prep_cache: dict,
-        residency_by_buf: dict[str, bool],
+        residency_by_buf: dict[str, Optional[str]],
     ) -> dict[str, list[tuple[int, int]]]:
         """Physical slicing-match pairs for each divided producer this op reads.
 
@@ -1434,9 +1476,9 @@ class CoOptimizingAllocator(ScratchpadAllocator):
         reductions/reshapes, where a coeff-keyed signature would conflate axes.
 
         Excluded from matching (producer then falls back to HBM, always correct):
-        a producer that can never be resident (``residency_by_buf`` False); a
-        producer candidate whose write carries a partial reduction (output not
-        final); and either side's candidate whose slicing of ``P`` is
+        a producer that can never be resident (``residency_by_buf`` reason is not
+        ``None``); a producer candidate whose write carries a partial reduction
+        (output not final); and either side's candidate whose slicing of ``P`` is
         unrepresentable -- we never pin on a slicing we cannot verify.
         """
         if consumer_op is None:
@@ -1446,8 +1488,9 @@ class CoOptimizingAllocator(ScratchpadAllocator):
         for parent in parent_names:
             # A never-resident producer always reads from HBM, so its division
             # can't constrain the consumer -- skip the match (and the write-index
-            # lookup below, undefined for StarDep writers).
-            if not residency_by_buf.get(parent, False):
+            # lookup below, undefined for StarDep writers). A missing entry
+            # defaults to non-resident (sentinel reason), never None.
+            if residency_by_buf.get(parent, "not in graph") is not None:
                 continue
             parent_divs = divisions[parent]
             parent_op = op_by_name[parent]

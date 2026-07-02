@@ -193,7 +193,7 @@ def buffer_not_read_in_full(graph: GraphLowering | GraphView, buf_name: str) -> 
     except (TypeError, ValueError):
         return True
     for op in graph.operations:
-        for dep in op.get_read_writes().reads:
+        for dep in op_read_writes(op).reads:
             if dep.name != buf_name:
                 continue
             try:

@@ -78,6 +78,12 @@ __all__ = ["CpSatLayoutSolver"]
 
 logger = logging.getLogger(__name__)
 
+# Drop cause for a buffer the solver chose to spill (rather than one pinned out
+# up front by _add_core_division): it fit but residency gave no benefit, or
+# there was no room once higher-value buffers were placed. Shared so the DEBUG
+# log and the reasons surfaced to the allocator agree.
+_SOLVER_CHOSE_SPILL = "spilled by solver (no residency benefit / no room)"
+
 
 @dataclass
 class _PlacementUnit:
@@ -181,10 +187,15 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         self._capacity_units = self.limit // self.alignment
         self._time_limit_seconds = time_limit_seconds
         self._bottom_justify = bottom_justify
+        # Per-buffer drop cause for the most recent solve ({buffer name: reason},
+        # spilled buffers only). The allocator reads this to populate its own
+        # ``reject_reasons`` so cpsat spills show up in the LX-pinning debug log.
+        self.spill_reasons: dict[str, str] = {}
 
     def plan_layout(
         self, buffers: list[CoreDivisionBuffer], log_lx_usage: bool = False
     ) -> list[CoreDivisionBuffer]:
+        self.spill_reasons = {}
         if not buffers:
             return []
         assert all(b.address is None for b in buffers), (
@@ -204,8 +215,13 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
             for b in buffers
         }
 
-        offsets, spilled, chosen_div = self._run(model, working)
+        offsets, spilled, chosen_div, forced_reasons = self._run(model, working)
         offsets = {k: v * self.alignment for k, v in offsets.items()}
+        # Surface a drop cause for every spilled buffer: the pre-solve forced
+        # reason when we have one, otherwise the solver chose to spill it.
+        self.spill_reasons = {
+            name: forced_reasons.get(name, _SOLVER_CHOSE_SPILL) for name in spilled
+        }
 
         for b in buffers:
             b.address = None if b.name in spilled else offsets.get(b.name)
@@ -219,7 +235,7 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         self,
         model: "cp_model.CpModel",
         tensors: dict[str, _CoreDivisionBufferWithCpVars],
-    ) -> tuple[dict[str, int], set[str], dict[str, int]]:
+    ) -> tuple[dict[str, int], set[str], dict[str, int], dict[str, str]]:
         children_of = self._get_children(tensors)
         self._add_inplace_relaxation(model, tensors)
         forced_reasons = self._add_core_division(model, tensors, children_of)
@@ -282,12 +298,10 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
                 logger.debug(
                     "[CP-SAT layout solver]   %s -> HBM: %s",
                     name,
-                    forced_reasons.get(
-                        name, "spilled by solver (no residency benefit / no room)"
-                    ),
+                    forced_reasons.get(name, _SOLVER_CHOSE_SPILL),
                 )
 
-        return offsets, spilled, chosen_div
+        return offsets, spilled, chosen_div, forced_reasons
 
     def _add_inplace_relaxation(
         self,
@@ -453,8 +467,9 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
     ) -> dict[str, str]:
         """Pin out of LX the buffers whose non-residency is fixed up front: those
         whose *smallest* candidate footprint still exceeds capacity, and those
-        marked ``residency_allowed=False`` by the allocator. Returns ``name ->
-        reason`` for the buffers it forces out (drop-cause debug logging)."""
+        the allocator marked non-resident (``residency_reason`` set). Returns
+        ``name -> reason`` for the buffers it forces out (drop-cause debug
+        logging), using the allocator's specific reason when it has one."""
         forced: dict[str, str] = {}
         for sb in bufs.values():
             t = sb.buffer
@@ -468,7 +483,9 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
                 )
                 model.Add(sb.in_buffer == 0)
             elif not t.residency_allowed:
-                forced[t.name] = "residency not allowed by allocator"
+                forced[t.name] = (
+                    t.residency_reason or "residency not allowed by allocator"
+                )
                 model.Add(sb.in_buffer == 0)
         return forced
 

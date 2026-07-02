@@ -120,11 +120,18 @@ class CoreDivisionBuffer(LifetimeBoundBuffer):
     # the merge/residency across that edge.
     cd_parent_matches: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
     chosen_division: Optional[int] = None
-    # When False the buffer may not be made resident (e.g. a graph boundary that
-    # can't be LX-pinned without a clone). It is still handed to the solver so it
-    # participates in matching -- a forced-out consumer keeps its producers'
-    # residency viable instead of orphaning them.
-    residency_allowed: bool = True
+    # Why the buffer may not be made resident, or ``None`` if it may. A non-None
+    # reason (e.g. "lx back gap", "single use") pins it out of LX up front and is
+    # surfaced as its spill cause; ``None`` means residency is allowed. The buffer
+    # is handed to the solver either way so it participates in matching -- a
+    # forced-out consumer keeps its producers' residency viable instead of
+    # orphaning them.
+    residency_reason: Optional[str] = None
+
+    @property
+    def residency_allowed(self) -> bool:
+        """True iff the buffer carries no blocking ``residency_reason``."""
+        return self.residency_reason is None
 
 
 def _assert_in_place_relationships(
