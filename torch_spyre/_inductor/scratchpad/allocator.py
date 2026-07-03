@@ -173,7 +173,7 @@ class ScratchpadAllocator(ABC):
             # allow all inputs. Does not work for all ops
             return reads
         if hasattr(op, "data"):
-            return get_op_pointwise_inputs(op)
+            return get_op_pointwise_inputs(op.data)
         return []
 
     def _filter_ops(
