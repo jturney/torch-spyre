@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
@@ -97,7 +98,7 @@ class _PlacementUnit:
     justified_offset: int = 0  # final justified offset
 
 
-def _assert_core_divisions_enumerated(buffers: list[CoreDivisionBuffer]):
+def _assert_core_divisions_enumerated(buffers: Sequence[CoreDivisionBuffer]):
     """Assert that all buffers have enumerated core divisions."""
     for b in buffers:
         assert len(b.core_divisions) != 0, (
@@ -193,7 +194,7 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         self.spill_reasons: dict[str, str] = {}
 
     def plan_layout(
-        self, buffers: list[CoreDivisionBuffer], log_lx_usage: bool = False
+        self, buffers: Sequence[CoreDivisionBuffer], log_lx_usage: bool = False
     ) -> list[CoreDivisionBuffer]:
         self.spill_reasons = {}
         if not buffers:
@@ -226,7 +227,7 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         for b in buffers:
             b.address = None if b.name in spilled else offsets.get(b.name)
             b.chosen_division = chosen_div.get(b.name, b.chosen_division)
-        return buffers
+        return list(buffers)
 
     # ------------------------------------------------------------------
     # Model build + solve
@@ -258,10 +259,19 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
         # re-read it from HBM, so a spill costs ``num_consumers * size``. The
         # division is whatever maximizes residency -- even no split at all, if
         # that is what lets a buffer match its consumers and reside.
+        #
+        # ``unallocated_reads`` adds the consumers the solver never sees as
+        # candidates (filtered-out ops, graph outputs): they still read the
+        # buffer from LX when it resides, so they count toward its spill cost.
+        # It is 0 on the joint path, leaving this weight equal to the candidate
+        # consumer count there.
+        def _spill_weight(sb: "_CoreDivisionBufferWithCpVars") -> int:
+            return len(children_of.get(sb.name, [])) + sb.buffer.unallocated_reads
+
         hbm_terms = [
-            len(children_of.get(sb.name, [])) * sb.buffer.size * (1 - sb.in_buffer)
+            _spill_weight(sb) * sb.buffer.size * (1 - sb.in_buffer)
             for sb in tensors.values()
-            if len(children_of.get(sb.name, [])) * sb.buffer.size
+            if _spill_weight(sb) * sb.buffer.size
         ]
         if hbm_terms:
             model.Minimize(sum(hbm_terms))
@@ -505,6 +515,13 @@ class CpSatLayoutSolver(MemoryPlanSolver[CoreDivisionBuffer]):
             t = sb.buffer
             kids = children_of.get(t.name, [])
             if not kids:
+                if t.unallocated_reads:
+                    # Read only by consumers the solver never sees (filtered-out
+                    # ops / graph outputs). They still read it from LX when it
+                    # resides, so residency is worthwhile; there is no resident
+                    # consumer to constrain the division against, so no gate.
+                    # TODO: Remove this when the other solvers are brought to parity
+                    continue
                 # Nothing consumes this buffer from LX -> it can never reside.
                 forced.setdefault(t.name, "no consumer reads it from LX")
                 model.Add(sb.in_buffer == 0)

@@ -127,6 +127,17 @@ class CoreDivisionBuffer(LifetimeBoundBuffer):
     # forced-out consumer keeps its producers' residency viable instead of
     # orphaning them.
     residency_reason: Optional[str] = None
+    # Count of reads of this buffer by consumers the solver never sees as
+    # candidates -- ops filtered out of the candidate set (e.g. under the
+    # placement-only conversion in ``_as_core_division_buffers``) or graph
+    # outputs. Such a consumer still reads this buffer *from LX* when it resides,
+    # so the read counts toward the buffer's spill cost even though no ``parents``
+    # edge represents it, and it lets the buffer reside despite having no resident
+    # (candidate) consumer to match a division against. Zero for the joint
+    # allocator, where every consumer is a candidate, so the objective and
+    # residency gate are unchanged there.
+    # TODO: Drop this and make other solvers use the placement = False flag
+    unallocated_reads: int = 0
 
     @property
     def residency_allowed(self) -> bool:
@@ -171,7 +182,10 @@ class MemoryPlanSolver(ABC, Generic[_BufferT]):
 
     Parameterized by the buffer type the solver consumes: the placement-only
     solvers work on :class:`LifetimeBoundBuffer`, while :class:`CpSatLayoutSolver`
-    requires the richer :class:`CoreDivisionBuffer`.
+    reads the richer :class:`CoreDivisionBuffer` metadata. Since
+    ``CoreDivisionBuffer`` subclasses ``LifetimeBoundBuffer``, the allocator always
+    hands over ``CoreDivisionBuffer``s and every solver accepts them (LSP): the
+    placement solvers simply ignore the extra fields.
     """
 
     def __init__(self, size: int, alignment: int = 128):
@@ -189,12 +203,17 @@ class MemoryPlanSolver(ABC, Generic[_BufferT]):
 
     @abstractmethod
     def plan_layout(
-        self, buffers: list[_BufferT], log_lx_usage: bool = False
+        self, buffers: Sequence[_BufferT], log_lx_usage: bool = False
     ) -> list[_BufferT]:
         """
         Utilizes an implementation defined algorithm to determine
         if and where buffers should be placed in scratchpad memory based
         on their attributes.
+
+        ``buffers`` is a :class:`Sequence` (not ``list``) so a caller may pass a
+        ``list`` of a *subtype* -- e.g. the allocator always converts to
+        ``CoreDivisionBuffer`` and hands the same list to any solver (LSP);
+        covariance lets that type-check against every solver's element type.
 
         Args:
             buffers (list[LifetimeBoundBuffer]): The set of candidate buffers for memory planning
@@ -282,7 +301,7 @@ class GreedyLayoutSolver(MemoryPlanSolver[LifetimeBoundBuffer]):
                 self.usage.remove(buf)
 
     def plan_layout(
-        self, buffers: list[LifetimeBoundBuffer], log_lx_usage: bool = False
+        self, buffers: Sequence[LifetimeBoundBuffer], log_lx_usage: bool = False
     ) -> list[LifetimeBoundBuffer]:
         """Allocates addresses to the provided buffer list
 
@@ -351,4 +370,4 @@ class GreedyLayoutSolver(MemoryPlanSolver[LifetimeBoundBuffer]):
                         used += b.size
                 logger.debug("t=%d: %d KB  [%s]", idx, used // 1024, ", ".join(live))
 
-        return buffers
+        return list(buffers)

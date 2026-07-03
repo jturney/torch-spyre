@@ -41,6 +41,7 @@ from torch_spyre._inductor.pass_utils import (
     op_read_writes,
     _prepare_per_core_view,
     _per_core_view_from_prep,
+    _per_core_view_on_buf,
 )
 from torch_spyre._inductor.work_division import enumerate_work_division_candidates
 from torch_spyre._inductor.errors import Unsupported
@@ -60,7 +61,6 @@ from torch_spyre._inductor.scratchpad.passes import (
 )
 from torch_spyre._inductor.scratchpad.utils import (
     OP_OUTPUT_GOOD_FOR_LX_REUSE,
-    buffer_not_read_in_full,
     clone_at_graph_boundaries,
     mem_usage_by_buf,
     calculate_liveness,
@@ -448,6 +448,162 @@ def _lx_planning_size() -> int:
     return int((2 << 20) * (1.0 - config.dxp_lx_frac_avail))
 
 
+def _fixed_core_division(op: Operation) -> CoreDivision:
+    """The op's upstream-committed division (``op.op_it_space_splits``) as a single
+    pinned :class:`CoreDivision`; a never-divided op yields a one-core empty split.
+    """
+    seed: tuple[dict, dict] = getattr(op, "op_it_space_splits", None) or ({}, {})
+    return CoreDivision(output_splits=dict(seed[0]), reduction_splits=dict(seed[1]))
+
+
+def _as_core_division_buffers(
+    buffers: Sequence[LifetimeBoundBuffer],
+    graph: GraphLowering,
+) -> list[CoreDivisionBuffer]:
+    """Convert plain ``LifetimeBoundBuffer``s to ``CoreDivisionBuffer``s for
+    solvers that require the richer type (e.g. :class:`CpSatLayoutSolver`).
+
+    ``CoreDivisionBuffer`` subclasses ``LifetimeBoundBuffer`` and the placement
+    solvers read only the base fields, so any solver can consume the result (LSP):
+    the caller always converts, regardless of which solver is configured. To stay
+    correct across both worlds -- the placement solvers use ``size`` directly as
+    the footprint, while ``CpSatLayoutSolver`` divides it by the chosen division's
+    ``output_partition`` -- ``size`` stays the already-per-core footprint
+    (``_build_bound_buffers`` divided by the op's pre-determined core division) and
+    each buffer gets a single *trivial* ``CoreDivision`` (empty splits,
+    ``output_partition == 1``). With one candidate the solver cannot re-divide the
+    buffer: it loses the joint core-division optimization path and merely *places*
+    the buffer on its fixed, pre-determined division (placement-only CP-SAT).
+
+    ``parents`` is populated with each op's read deps that are themselves
+    candidates, because CP-SAT scores residency per producer->consumer edge and
+    gates it on a slicing-compatible division: a buffer with no children, or any
+    child lacking a compatible pair, can never reside (see
+    ``_implicate_core_division``). Although each buffer's stored ``CoreDivision``
+    is trivial (for sizing, above), the match pairs are derived from the two ops'
+    *fixed* divisions (``op.op_it_space_splits``, read via ``_per_core_view_on_buf``
+    -- independent of the stored trivial ``CoreDivision``). Unlike the old
+    conversion -- which asserted every edge compatible with a blanket ``[(0, 0)]``
+    pair -- the pair is ``[(0, 0)]`` only when the producer's write-view and the
+    consumer's read-view slice the shared buffer identically (same per-core view,
+    same core count, no partial reduction). When the fixed divisions disagree --
+    which they may, since the upstream passes size each op independently -- the
+    edge gets an **empty** match list, so the producer falls back to HBM across it
+    (always correct) instead of being wrongly pinned to a slicing its consumer
+    does not read. An input parent (no producing op) keeps ``[(0, 0)]``: its clone
+    is laid out to match its consumer.
+
+    Reads by consumers that are *not* candidates -- ops filtered out of the LX
+    set, or graph outputs -- are counted in ``unallocated_reads`` instead: they
+    still read the buffer from LX when it resides (no output cloning needed for
+    an intermediate), so they justify pinning it even though no ``parents`` edge
+    represents them. This matches the greedy allocator, which pins any buffer
+    read more than once regardless of where its consumers live. Buffers that are
+    already ``CoreDivisionBuffer``s (e.g. from the joint allocator) pass through
+    unchanged.
+    """
+    candidate_names = {b.name for b in buffers}
+    op_by_name = {op.name: op for op in graph.operations}
+    # Memoizes _per_core_view_on_buf across the edge checks below; scoped to this
+    # graph (the key carries dep + buffer name).
+    view_cache: dict = {}
+
+    # Whole-graph consumer scan: every op that reads a buffer, candidate or not.
+    # Split below into candidate parents (edges) and unallocated reads.
+    consumers_of: dict[str, set[str]] = {}
+    for op in graph.operations:
+        for dep in op_read_writes(op).reads:
+            if dep.name != op.name:
+                consumers_of.setdefault(dep.name, set()).add(op.name)
+
+    def _edge_matches(consumer_op: Operation, parent: str) -> bool:
+        """True iff ``consumer_op`` reads ``parent`` with the same per-core slicing
+        the producer wrote it, under both ops' fixed divisions (the solver can only
+        pin ``parent`` across an edge whose divisions agree)."""
+        parent_op = op_by_name.get(parent)
+        if parent_op is None:
+            # Graph-input parent: no producing op to compare against; its clone is
+            # sliced to match this consumer, so treat the edge as compatible.
+            return True
+        write_dep = next(
+            (
+                w
+                for w in op_read_writes(parent_op).writes
+                if w.name == parent and hasattr(w, "index")
+            ),
+            None,
+        )
+        read_dep = next(
+            (
+                r
+                for r in op_read_writes(consumer_op).reads
+                if r.name == parent and hasattr(r, "index")
+            ),
+            None,
+        )
+        if write_dep is None or read_dep is None:
+            return False
+        prod_view, prod_partial, prod_ok = _per_core_view_on_buf(
+            parent_op, write_dep, parent, view_cache
+        )
+        cons_view, _cons_partial, cons_ok = _per_core_view_on_buf(
+            consumer_op, read_dep, parent, view_cache
+        )
+        return (
+            prod_ok
+            and cons_ok
+            and not prod_partial
+            and prod_view == cons_view
+            and _fixed_core_division(parent_op).cores_used
+            == _fixed_core_division(consumer_op).cores_used
+        )
+
+    converted: list[CoreDivisionBuffer] = []
+    for b in buffers:
+        if isinstance(b, CoreDivisionBuffer):
+            converted.append(b)
+            continue
+        op = op_by_name.get(b.name)
+        parents: list[str] = []
+        if op is not None:
+            for dep in op_read_writes(op).reads:
+                if (
+                    dep.name in candidate_names
+                    and dep.name != b.name
+                    and dep.name not in parents
+                ):
+                    parents.append(dep.name)
+
+        # Compatibility is per-edge: [(0, 0)] only when the two ops' fixed
+        # divisions slice the shared buffer identically, else [] (no pinning).
+        cd_parent_matches = {
+            p: ([(0, 0)] if op is not None and _edge_matches(op, p) else [])
+            for p in parents
+        }
+        # Consumers the solver never sees as candidates (each counted once).
+        unallocated_reads = sum(
+            1 for c in consumers_of.get(b.name, ()) if c not in candidate_names
+        )
+        # Restrict in-place parents to candidates: the solver indexes its buffer
+        # dict by every merge parent, so a filtered-out parent would KeyError.
+        in_place = [p for p in b.in_place_parents if p in candidate_names]
+        converted.append(
+            CoreDivisionBuffer(
+                b.name,
+                b.size,
+                b.uses,
+                first_use_is_read=b.first_use_is_read,
+                address=b.address,
+                in_place_parents=in_place,
+                core_divisions=[CoreDivision()],
+                parents=parents,
+                cd_parent_matches=cd_parent_matches,
+                unallocated_reads=unallocated_reads,
+            )
+        )
+    return converted
+
+
 class DefaultAllocator(ScratchpadAllocator):
     def __init__(
         self,
@@ -491,6 +647,14 @@ class DefaultAllocator(ScratchpadAllocator):
         for p in self.pre_optimization_passes:
             p.apply_pass(graph)
         buffers = self._generate_buffers(graph)
+        # CoreDivisionBuffer subclasses LifetimeBoundBuffer and the placement
+        # solvers read only the base fields, so every solver accepts the converted
+        # buffers (LSP); convert unconditionally rather than probing the solver.
+        # The conversion keeps each buffer's already-per-core size and a trivial
+        # division, so the placement solvers see the same footprint as before while
+        # CpSatLayoutSolver additionally gets the parent-edge slicing matches.
+        # TODO: Refactor to combine this with default allocator behavior
+        buffers = _as_core_division_buffers(buffers, graph)
         allocation = self.layout_planning.plan_layout(buffers, log_lx_usage=True)
         for b in allocation:
             if b.address is None:
@@ -1176,13 +1340,11 @@ class CoOptimizingAllocator(ScratchpadAllocator):
         }
 
     def _fixed_division(self, op: Operation) -> CoreDivision:
-        """The op's upstream-committed division (``op.op_it_space_splits``) as a
-        single pinned CoreDivision; a never-divided op yields a one-core empty
-        split. Used as the fallback for ops with no enumerable candidates, so
-        every buffer carries at least one division.
+        """The op's upstream-committed division as a single pinned CoreDivision;
+        used as the fallback for ops with no enumerable candidates, so every
+        buffer carries at least one division. See :func:`_fixed_core_division`.
         """
-        seed: tuple[dict, dict] = getattr(op, "op_it_space_splits", None) or ({}, {})
-        return CoreDivision(output_splits=dict(seed[0]), reduction_splits=dict(seed[1]))
+        return _fixed_core_division(op)
 
     def _enumerate_core_divisions(
         self, op: Operation, max_cores: int
@@ -1583,23 +1745,59 @@ _PLACEMENT_SOLVERS: dict[str, type[MemoryPlanSolver]] = {
 }
 
 
+def _make_cpsat_solver(size: int) -> Optional[MemoryPlanSolver]:
+    """Build the CP-SAT layout solver, or ``None`` when ortools is unavailable.
+
+    Imported lazily so this module (and every non-cpsat path) loads without
+    ortools installed; ``CpSatLayoutSolver.__init__`` raises ``ImportError`` when
+    ortools (``cp_model``) is missing, which we translate to ``None`` so callers
+    can fall back to a placement-only greedy solve.
+    """
+    try:
+        from torch_spyre._inductor.scratchpad.ilp_solver_ortools import (
+            CpSatLayoutSolver,
+        )
+
+        return CpSatLayoutSolver(size)
+    except ImportError as exc:
+        logger.warning(
+            "cpsat layout solver unavailable (%s); falling back to the "
+            "default greedy allocator.",
+            exc,
+        )
+        return None
+
+
 def select_allocator() -> ScratchpadAllocator:
     """Build the scratchpad allocator and inject its layout solver from config.
 
     This is the single place that maps config to an (allocator, solver) pair, so
     the allocators themselves take an explicit solver and never inspect config:
 
-    * ``layout_solver == "cpsat"`` -> joint core-division + LX placement via
-      :class:`CoOptimizingAllocator` (with a built-in greedy fallback). This
-      wins over ``co_optimizing_lx_planning`` because CP-SAT runs its own
-      core-division co-optimization.
-    * ``co_optimizing_lx_planning`` -> gap-based co-optimization via
-      :class:`StrategyBCoOptimizingAllocator`.
+    * ``layout_solver == "cpsat"`` with ``co_optimizing_lx_planning`` -> joint
+      core-division + LX placement via :class:`CoOptimizingAllocator` (with a
+      built-in greedy fallback).
+    * ``layout_solver == "cpsat"`` without co-optimization -> placement-only
+      :class:`DefaultAllocator` driven by the CP-SAT solver, placing buffers on
+      each op's pre-determined core division (the buffers are converted to
+      trivial ``CoreDivisionBuffer``s). Falls back to greedy when ortools is
+      absent.
+    * ``co_optimizing_lx_planning`` (non-cpsat solver) -> gap-based
+      co-optimization via :class:`StrategyBCoOptimizingAllocator`.
     * otherwise -> placement-only :class:`DefaultAllocator` with the configured
       gap-based solver (greedy/bestfit/firstfit).
     """
+    size = _lx_planning_size()
     if config.layout_solver == "cpsat":
-        return CoOptimizingAllocator()
+        if config.co_optimizing_lx_planning:
+            return CoOptimizingAllocator()
+        # Placement-only CP-SAT on the pre-determined core divisions. When
+        # ortools is missing, degrade to greedy placement (still correct).
+        solver = _make_cpsat_solver(size)
+        if solver is None:
+            logger.debug("falling back to greedy solver. Make sure Or-Tools is available")
+            solver = GreedyLayoutSolver(size)
+        return DefaultAllocator(layout_planning=solver)
 
     try:
         solver_cls = _PLACEMENT_SOLVERS[config.layout_solver]
@@ -1607,7 +1805,7 @@ def select_allocator() -> ScratchpadAllocator:
         raise ValueError(
             f"Invalid layout_solver config option '{config.layout_solver}'."
         )
-    solver = solver_cls(_lx_planning_size())
+    solver = solver_cls(size)
 
     if config.co_optimizing_lx_planning:
         return StrategyBCoOptimizingAllocator(layout_planning=solver)
