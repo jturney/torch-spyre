@@ -1795,7 +1795,9 @@ def select_allocator() -> ScratchpadAllocator:
         # ortools is missing, degrade to greedy placement (still correct).
         solver = _make_cpsat_solver(size)
         if solver is None:
-            logger.debug("falling back to greedy solver. Make sure Or-Tools is available")
+            logger.debug(
+                "falling back to greedy solver. Make sure Or-Tools is available"
+            )
             solver = GreedyLayoutSolver(size)
         return DefaultAllocator(layout_planning=solver)
 
