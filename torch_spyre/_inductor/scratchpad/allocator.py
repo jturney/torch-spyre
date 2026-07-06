@@ -35,7 +35,6 @@ from torch._inductor.graph import GraphLowering
 from torch_spyre._inductor.pass_utils import (
     apply_splits_from_index_coeff,
     concretize_expr,
-    device_coordinates,
     iteration_space_from_op,
     splits_by_index_coeff,
     op_read_writes,
@@ -69,6 +68,7 @@ from torch_spyre._inductor.scratchpad.utils import (
     buffer_not_read_in_full,
     GraphView,
     get_op_pointwise_inputs,
+    _would_produce_lx_back_gap,
 )
 from torch_spyre._inductor.scratchpad.graph_editor import GraphEditor
 
@@ -77,44 +77,6 @@ from torch_spyre._inductor.logging_utils import get_inductor_logger
 from torch_spyre._inductor.pass_utils import _is_matmul_op
 
 logger = get_inductor_logger("scratchpad.allocator")
-
-
-def _would_produce_lx_back_gap(
-    graph: GraphLowering,
-    buf_name: str,
-    uses: list[int],
-) -> bool:
-    """Check if pinning a buffer to LX would produce a backGapCore_.
-
-    A backGap fires when device_size[d] > it_dim_size for any device dimension d.
-    The backend supports backGap for HBM but not for LX, so buffers triggering
-    this condition must stay in HBM.
-    """
-    buf = graph.get_buffer(buf_name)
-    stl = buf.layout.device_layout
-    device_size = stl.device_size
-
-    for use_idx in uses:
-        op = graph.operations[use_idx]
-        rw = op.get_read_writes()
-        for dep in rw.reads | rw.writes:
-            if dep.name != buf_name:
-                continue
-            try:
-                coords = device_coordinates(stl, dep, None)
-            except Exception:
-                continue
-            for d, coord_expr in enumerate(coords[:-1]):
-                syms = coord_expr.free_symbols
-                if not syms:
-                    if device_size[d] > 1:
-                        return True
-                    continue
-                sym = next(iter(syms))
-                it_dim_size = int(dep.ranges[sym])
-                if device_size[d] > it_dim_size:
-                    return True
-    return False
 
 
 class ScratchpadAllocator(ABC):
