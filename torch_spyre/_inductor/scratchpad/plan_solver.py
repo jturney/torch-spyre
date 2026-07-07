@@ -103,7 +103,6 @@ class CoreDivision:
 @dataclass
 class CoreDivisionBuffer(LifetimeBoundBuffer):
     """A :class:`LifetimeBoundBuffer` carrying the joint core-division metadata
-    consumed only by :class:`CpSatLayoutSolver`.
 
     The placement-only solvers (greedy/first-fit/best-fit) never look at these
     fields, so they stay on this subclass rather than the shared base.
