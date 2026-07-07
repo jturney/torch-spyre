@@ -63,7 +63,7 @@ class CoreDivision:
 
     ``output_splits`` / ``reduction_splits`` are the stride/coeff-keyed encoding
     produced by :func:`pass_utils.splits_by_index_coeff` -- exactly the shape
-    stored in ``op.op_it_space_splits``. ``CpSatLayoutSolver`` uses these to size
+    stored in ``op.op_it_space_splits``. Solvers are expected to use these to size
     the buffer (per-core footprint = total / ``output_partition``).
     """
 
