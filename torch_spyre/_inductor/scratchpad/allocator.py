@@ -38,7 +38,6 @@ from torch_spyre._inductor.pass_utils import (
     iteration_space_from_op,
     splits_by_index_coeff,
     op_read_writes,
-    _is_matmul_op,
     _prepare_per_core_view,
     _per_core_view_from_prep,
     _per_core_view_on_buf,
