@@ -205,6 +205,92 @@ def buffer_not_read_in_full(graph: GraphLowering | GraphView, buf_name: str) -> 
     return False
 
 
+def _writes_at_constant_offset(op: Operation) -> bool:
+    """True if ``op`` writes any buffer at a non-zero *constant* offset -- a
+    sliced in-place mutation into a sub-region (e.g. ``x[:, 32:96] = ...``,
+    whose write ``MemoryDep`` index is ``256*d0 + d1 + 32`` with
+    ``get_offset() == 32``).
+
+    Coverage-aware: only a *constant* non-zero offset counts. Per-core /
+    coarse-tile writes carry their per-core shift as a symbol in the offset
+    (``free_symbols`` non-empty), so those are NOT flagged -- avoiding the
+    coarse-tile over-guard a flat-numel test would trigger.
+    """
+    for dep in op_read_writes(op).writes:
+        try:
+            off = dep.get_offset()
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if off != 0 and not getattr(off, "free_symbols", frozenset()):
+            return True
+    return False
+
+
+def ops_in_offset_mutation_component(
+    graph: GraphLowering | GraphView,
+) -> set[str]:
+    """Names of ops data-connected to a sliced in-place mutation that writes at
+    a constant non-zero offset (e.g. ``x[:, 32:96] = ...``).
+
+    Such a mutation and everything fused with it land in one SDSC. The offset
+    write's codegen assumes the target buffer keeps the slicing the eager path
+    chose; if the co-optimizing allocator re-slices any op in that fused kernel
+    (a different core division), the deeptools scheduler can no longer place the
+    offset write and aborts the compile (``DtException: "There must be at least
+    one valid candidate"``, ``L3DlOpsScheduler.cpp:1196``). This is the root
+    cause of the ``slice_stick_mutation_*`` co-optimizing-allocator failures --
+    the division change, *not* LX residency (the abort reproduces with pinning
+    fully disabled).
+
+    The caller pins every op in this set to its upstream (fixed) division, so
+    the offset-write SDSC keeps the schedulable slicing the greedy /
+    placement-only path uses. Fusion boundaries are unknown at planning time, so
+    the SDSC is over-approximated by the undirected data-dependency component
+    containing the offset write: producer chain (the value written), the
+    mutation target it aliases, and the consumers of that target. Over-approxi-
+    mation only forgoes a division optimization (correct, never a new failure --
+    a fixed division is exactly what greedy uses).
+
+    Coverage-aware via :func:`_writes_at_constant_offset`: symbolic per-core
+    offsets (coarse tiling) are not offset writes, so no component is seeded and
+    coarse tiling is not constrained.
+    """
+    # Undirected adjacency over buffer names (op.name == its output buffer,
+    # Inductor convention). Edges: producer<->operand (read deps) and a
+    # MutationLayout op <-> its aliased target buffer.
+    adj: dict[str, set[str]] = {}
+
+    def link(a: str, b: str) -> None:
+        adj.setdefault(a, set()).add(b)
+        adj.setdefault(b, set()).add(a)
+
+    seeds: list[str] = []
+    for op in graph.operations:
+        for dep in op_read_writes(op).reads:
+            name = getattr(dep, "name", None)
+            if name:
+                link(op.name, name)
+        layout = getattr(op, "layout", None)
+        if isinstance(layout, MutationLayoutSHOULDREMOVE):
+            try:
+                link(op.name, layout.target.get_name())
+            except (AttributeError, TypeError):
+                pass
+        if _writes_at_constant_offset(op):
+            seeds.append(op.name)
+
+    op_names = {op.name for op in graph.operations}
+    component: set[str] = set()
+    stack = list(seeds)
+    while stack:
+        node = stack.pop()
+        if node in component:
+            continue
+        component.add(node)
+        stack.extend(adj.get(node, ()))
+    return component & op_names
+
+
 def get_buffer_users(graph: GraphLowering | GraphView) -> dict[str, list[Operation]]:
     buf_users_read_and_write: dict[str, list[Operation]] = {}
     for op in graph.operations:

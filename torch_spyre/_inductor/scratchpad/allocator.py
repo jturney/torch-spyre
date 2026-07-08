@@ -66,6 +66,7 @@ from torch_spyre._inductor.scratchpad.utils import (
     get_ncores_for_buffers,
     get_buffer_users,
     buffer_not_read_in_full,
+    ops_in_offset_mutation_component,
     GraphView,
     get_op_pointwise_inputs,
     _would_produce_lx_back_gap,
@@ -1298,10 +1299,25 @@ class CoOptimizingAllocator(ScratchpadAllocator):
         committed ``op_it_space_splits``. No op-kind pre-filter -- residency is
         gated per buffer (``residency_allowed``) and by the solver, so ineligible
         ops still participate as producers/consumers in the match.
+
+        Exception: ops data-connected to a sliced in-place mutation (a constant-
+        offset write, e.g. ``x[:, 32:96] = ...``) are pinned to their upstream
+        (fixed) division. Re-slicing any op fused into the offset write's SDSC
+        makes the deeptools scheduler reject it (``DtException: "There must be at
+        least one valid candidate"``), the root cause of the
+        ``slice_stick_mutation_*`` failures. Keeping the fixed division there
+        matches the schedulable slicing the greedy path uses; it costs only a
+        division optimization, never correctness. See
+        ``utils.ops_in_offset_mutation_component``.
         """
         max_cores = config.sencores
+        fixed_division_ops = ops_in_offset_mutation_component(graph)
         return {
-            op.name: self._enumerate_core_divisions(op, max_cores)
+            op.name: (
+                [self._fixed_division(op)]
+                if op.name in fixed_division_ops
+                else self._enumerate_core_divisions(op, max_cores)
+            )
             for op in graph.operations
         }
 
