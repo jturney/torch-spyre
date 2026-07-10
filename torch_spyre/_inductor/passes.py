@@ -42,6 +42,7 @@ from .temp_passes import (
     bmm_unflatten_pass,
     mark_direct_unit_bmm_pass,
     mm_to_bmm_pass,
+    reroute_unbind,
 )
 from .coarse_tile import (
     hints_to_coarse_tile_groups,
@@ -212,6 +213,9 @@ class CustomPostPasses(_SpyreGraphPassPipeline):
                 mm_to_bmm_pass.apply,
                 mark_direct_unit_bmm_pass,
                 bmm_unflatten_pass.apply,
+                # Materialize aten.unbind's strided slice views (they mis-address
+                # when read on-device) through the CPU round-trip fallback.
+                reroute_unbind,
             ]
         )
 

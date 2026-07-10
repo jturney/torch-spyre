@@ -14,6 +14,8 @@
 
 # This file contains inductor passes that are only needed as temp fixes
 
+import warnings
+
 import torch
 from torch._inductor.pattern_matcher import (
     Arg,
@@ -25,6 +27,7 @@ from torch._inductor.pattern_matcher import (
 from .logging_utils import get_inductor_logger
 from .constants import SHARED_WEIGHT_UNIT_BMM_CUSTOM_META_KEY
 from .pass_utils import copy_fx_custom_meta
+from ..ops.fallbacks import FallbackWarning
 
 aten = torch.ops.aten
 
@@ -363,3 +366,42 @@ def _unflatten_bmm_batch_dims(
                 and not expand_node.users
             ):
                 graph.erase_node(expand_node)
+
+
+def reroute_unbind(graph: torch.fx.Graph) -> None:
+    """Route ``aten.unbind`` through a CPU round-trip fallback.
+
+    ``aten.unbind`` returns strided slice views (one per index along ``dim``,
+    surfacing as ``getitem`` nodes) that share the parent storage. An on-device
+    read of such a slice mis-addresses -- an unsupported stick expression, or an
+    incompatible host_size/dim_order on some dims. Rewrite the unbind to
+    ``spyre.unbind_via_cpu`` (returns a list of compact slices) so the downstream
+    ``getitem`` consumers read normal buffers. Correctness fallback with a
+    device<->host copy cost; each rewrite emits a ``FallbackWarning``. Mirrors the
+    ``spyre.reshape_via_cpu`` materialize fallback.
+    """
+    for node in list(graph.nodes):
+        if node.op != "call_function" or node.target != aten.unbind.int:
+            continue
+        # Only rewrite an unbind that is actually used (its slices surface as
+        # getitem nodes feeding on-device ops); an unused unbind is dropped by
+        # DCE anyway.
+        if not any(user.op != "output" for user in node.users):
+            continue
+        inp = node.args[0]
+        dim = int(node.args[1]) if len(node.args) > 1 else 0
+        with graph.inserting_after(node):
+            new_node = graph.call_function(
+                torch.ops.spyre.unbind_via_cpu.default, (inp, dim)
+            )
+        new_node.meta.update(node.meta)
+        copy_fx_custom_meta(node, new_node)
+        node.replace_all_uses_with(new_node)
+        graph.erase_node(node)
+        warnings.warn(
+            f"unbind (dim={dim}) routed through a CPU round-trip "
+            "(spyre.unbind_via_cpu): correctness fallback with a device<->host "
+            "copy cost",
+            category=FallbackWarning,
+        )
+    graph.lint()

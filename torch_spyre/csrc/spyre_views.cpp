@@ -240,6 +240,27 @@ at::Tensor spyre_unfold(const at::Tensor& self, int64_t dimension, int64_t size,
   return result;
 }
 
+std::vector<at::Tensor> spyre_unbind(const at::Tensor& self, int64_t dim) {
+  // aten.unbind returns strided slice views (one per index along dim) that
+  // share the parent storage and mis-address when read on-device. Materialize
+  // each slice into a compact buffer instead of returning aliasing views (CPU
+  // round-trip). Correctness fallback with a device<->host copy cost; gives up
+  // unbind view aliasing. The compiled path has the equivalent reroute_unbind
+  // pass; mirrors the spyre.reshape_via_cpu materialize fallback.
+  TORCH_WARN_ONCE(
+      "Spyre: unbind (dim ", dim,
+      ") materialized via a CPU round-trip; correctness fallback with a "
+      "device<->host copy cost. Gives up unbind view aliasing: unbind's slices "
+      "are strided views of the parent storage that mis-address when read "
+      "on-device.");
+  dim = c10::maybe_wrap_dim(dim, self.dim());
+  std::vector<at::Tensor> out;
+  for (const auto& slice : self.cpu().unbind(dim)) {
+    out.push_back(slice.contiguous().to(self.device()));
+  }
+  return out;
+}
+
 TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
   m.impl("view", TORCH_FN(spyre_view));
   m.impl("_unsafe_view", TORCH_FN(spyre__unsafe_view));
@@ -247,6 +268,7 @@ TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
   m.impl("alias", TORCH_FN(spyre_alias));
   m.impl("as_strided", TORCH_FN(spyre_as_strided));
   m.impl("unfold", TORCH_FN(spyre_unfold));
+  m.impl("unbind.int", TORCH_FN(spyre_unbind));
 }
 
 }  // namespace spyre

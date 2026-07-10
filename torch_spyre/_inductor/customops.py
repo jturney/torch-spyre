@@ -528,6 +528,27 @@ def _(
     return input.new_empty(shape)
 
 
+@torch.library.custom_op("spyre::unbind_via_cpu", mutates_args=(), device_types="spyre")
+def spyre_unbind_via_cpu(input: torch.Tensor, dim: int) -> list[torch.Tensor]:
+    """Unbind materialized on CPU: returns a list of compact (contiguous) slices.
+
+    ``aten.unbind`` returns strided slice views that share the parent storage; an
+    on-device read of such a slice mis-addresses (an unsupported stick expression,
+    or -- on some dims -- an incompatible host_size/dim_order). Materializing each
+    slice into its own compact buffer (CPU round-trip, then ``.contiguous()``)
+    lets consumers read normal buffers. Mirrors ``spyre.reshape_via_cpu`` but
+    returns a list, one tensor per slice.
+    """
+    warn_fallback("torch.ops.spyre.unbind_via_cpu")
+    cpu = input.to("cpu")
+    return [s.contiguous().to(input.device) for s in cpu.unbind(dim)]
+
+
+@spyre_unbind_via_cpu.register_fake
+def _(input: torch.Tensor, dim: int) -> list[torch.Tensor]:
+    return [s.contiguous() for s in input.unbind(dim)]
+
+
 @torch.library.custom_op("spyre::min_dim_int64_fallback", mutates_args=())
 def min_dim_int64_fallback(
     input: torch.Tensor, dim: int, keepdim: bool = False
