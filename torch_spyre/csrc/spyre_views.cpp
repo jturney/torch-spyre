@@ -85,6 +85,20 @@ at::Tensor materialize_reshape_via_cpu(const at::Tensor& self,
       "device<->host copy cost until an on-device restickify gather exists.");
   return self.cpu().reshape(new_size).to(self.device());
 }
+
+at::Tensor materialize_unfold_via_cpu(const at::Tensor& self, int64_t dimension,
+                                      int64_t size, int64_t step) {
+  TORCH_WARN_ONCE(
+      "Spyre: unfold (size ", size, ", step ", step,
+      ") materialized via a CPU round-trip; correctness fallback with a "
+      "device<->host copy cost. Gives up unfold view aliasing, which is "
+      "unavoidable: unfold's two output dims index the same storage with "
+      "overlapping strides, so an on-device read of the alias mis-addresses.");
+  return self.cpu()
+      .unfold(dimension, size, step)
+      .contiguous()
+      .to(self.device());
+}
 }  // namespace
 
 //
@@ -257,6 +271,18 @@ at::Tensor spyre_unfold(const at::Tensor& self, int64_t dimension, int64_t size,
   TORCH_CHECK(step > 0, "unfold: step must be positive, got ", step);
   TORCH_CHECK(size <= dim_size, "unfold: maximum size for tensor at dimension ",
               dimension, " is ", dim_size, " but size is ", size);
+
+  // An unfold with window size > 1 produces two output dims (num_slices @
+  // stride*step, window @ stride) that index the same parent storage; an
+  // on-device read of that overlapping/strided view mis-addresses (wrong values
+  // or an unsupported multi-variable stick expression). Materialize to a
+  // compact buffer instead of returning an aliasing view. A size-1 window is a
+  // no-op view that addresses fine and stays a view. Mirrors the
+  // reshape_changes_stick_dim guard in spyre_view_impl; the compiled path has
+  // the equivalent reroute_overlapping_unfold pass.
+  if (size > 1) {
+    return materialize_unfold_via_cpu(self, dimension, size, step);
+  }
 
   // Compute new sizes
   std::vector<int64_t> new_sizes(self.sizes().begin(), self.sizes().end());

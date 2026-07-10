@@ -462,6 +462,41 @@ def _(
     return input.new_empty(shape)
 
 
+@torch.library.custom_op("spyre::unfold_via_cpu", mutates_args=(), device_types="spyre")
+def spyre_unfold_via_cpu(
+    input: torch.Tensor,
+    dimension: int,
+    size: int,
+    step: int,
+) -> torch.Tensor:
+    """Unfold (sliding-window view) materialized on CPU to avoid the
+    overlapping-view addressing bug.
+
+    ``aten.unfold`` produces two output dims (num_slices @ stride*step, window @
+    stride) that index the same parent storage. When an on-device kernel reads
+    that view, the Inductor coordinate computation folds both loop vars into one
+    physical coordinate -> a multi-variable stick expression that either
+    mis-addresses (wrong values) or is rejected by ``_check_stick_expr_supported``.
+    Materializing the view into a compact buffer (CPU round-trip, then
+    ``.contiguous()``) removes the overlap so the consumer reads a normal buffer.
+    Mirrors ``spyre.reshape_via_cpu``.
+    """
+    warn_fallback("torch.ops.spyre.unfold_via_cpu")
+    input_cpu = input.to("cpu")
+    result_cpu = input_cpu.unfold(dimension, size, step).contiguous()
+    return result_cpu.to(input.device)
+
+
+@spyre_unfold_via_cpu.register_fake
+def _(
+    input: torch.Tensor,
+    dimension: int,
+    size: int,
+    step: int,
+) -> torch.Tensor:
+    return input.unfold(dimension, size, step).contiguous()
+
+
 @torch.library.custom_op("spyre::min_dim_int64_fallback", mutates_args=())
 def min_dim_int64_fallback(
     input: torch.Tensor, dim: int, keepdim: bool = False
