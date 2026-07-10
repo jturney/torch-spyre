@@ -42,6 +42,7 @@ from .temp_passes import (
     bmm_unflatten_pass,
     mark_direct_unit_bmm_pass,
     mm_to_bmm_pass,
+    reroute_overlapping_unfold,
     reroute_stick_misaligned_reshapes,
 )
 from .coarse_tile import (
@@ -225,6 +226,10 @@ class CustomPostPasses(_SpyreGraphPassPipeline):
                 # CPU round-trip so it does not hit an unsupported stick
                 # expression in propagate_layouts.
                 reroute_stick_misaligned_reshapes,
+                # Same fallback for overlapping/strided unfold views, whose two
+                # output dims index the same parent storage and mis-address when
+                # read on-device (wrong values or unsupported stick expression).
+                reroute_overlapping_unfold,
             ]
         )
 

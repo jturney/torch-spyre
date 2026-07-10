@@ -145,6 +145,72 @@ def _consumed_on_device(node: torch.fx.Node) -> bool:
     return any(user.op != "output" for user in node.users)
 
 
+def _is_materializable_unfold(node: torch.fx.Node) -> bool:
+    """True for an ``aten.unfold`` (sliding-window view) that must be materialized.
+
+    ``aten.unfold`` turns one input dim into two output dims -- num_slices (stride
+    ``parent_stride * step``) and window (stride ``parent_stride``) -- that index
+    the same parent storage. An on-device read then folds both loop vars into one
+    physical coordinate (see ``compute_coordinates`` / ``_check_stick_expr_supported``),
+    which either mis-addresses (wrong values) or raises an unsupported multi-var
+    stick expression. Materializing to a compact buffer fixes both.
+
+    v1 predicate (correctness-first): materialize any non-degenerate unfold
+    (window ``size > 1``). A size-1 window is a no-op view that addresses fine and
+    must NOT be materialized. This is intentionally broad -- it also covers
+    non-overlapping-but-stick-colliding cases (e.g. a 1-D ``unfold(0,4,4)`` whose
+    slice dim still lands in the stick coordinate as ``4*d0 + d1``) -- and only
+    ever over-materializes with a copy cost, never affecting correctness.
+    """
+    if node.op != "call_function" or node.target != aten.unfold.default:
+        return False
+    if len(node.args) < 4:
+        return False
+    size = _static_int(node.args[2])
+    if size is None:
+        return False
+    return size > 1
+
+
+def reroute_overlapping_unfold(graph: torch.fx.Graph) -> None:
+    """Route materializable ``aten.unfold`` views through the CPU round-trip.
+
+    An unfold view read by an on-device op mis-addresses (its two output dims
+    index the same parent storage; the coordinate computation folds both loop
+    vars into one physical coordinate). Rewrite such an unfold to
+    ``spyre.unfold_via_cpu`` so the consumer receives a compact, non-overlapping
+    tensor. Correctness fallback with a device<->host copy cost; each rewrite
+    emits a ``FallbackWarning``. Mirrors ``reroute_stick_misaligned_reshapes``.
+    """
+    for node in list(graph.nodes):
+        if not _is_materializable_unfold(node):
+            continue
+        if not _consumed_on_device(node):
+            continue
+        inp = node.args[0]
+        dimension, size, step = (
+            int(node.args[1]),
+            int(node.args[2]),
+            int(node.args[3]),
+        )
+        with graph.inserting_after(node):
+            new_node = graph.call_function(
+                torch.ops.spyre.unfold_via_cpu.default,
+                (inp, dimension, size, step),
+            )
+        new_node.meta.update(node.meta)
+        copy_fx_custom_meta(node, new_node)
+        node.replace_all_uses_with(new_node)
+        graph.erase_node(node)
+        warnings.warn(
+            f"unfold view (dim={dimension}, size={size}, step={step}) routed "
+            "through a CPU round-trip (spyre.unfold_via_cpu): correctness "
+            "fallback with a device<->host copy cost",
+            category=FallbackWarning,
+        )
+    graph.lint()
+
+
 def reroute_stick_misaligned_reshapes(graph: torch.fx.Graph) -> None:
     """Route stick-misaligned reshapes through the CPU round-trip fallback.
 
