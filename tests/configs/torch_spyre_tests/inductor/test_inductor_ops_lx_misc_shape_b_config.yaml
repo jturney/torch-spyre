@@ -18,17 +18,13 @@ test_suite_config:
         # xfail: an unexpected pass (XPASS) does not fail CI. Entries failing
         # in both wraps collapse to (pointwise|reduction).
         - names:
-            - LxPlanning.*::test_flatten_2d_full_lx_planning_(pointwise|reduction)
-            - LxPlanning.*::test_flatten_3d_full_lx_planning_(pointwise|reduction)
-            - LxPlanning.*::test_flatten_3d_mixed_dims_lx_planning_(pointwise|reduction)
-            - LxPlanning.*::test_flatten_3d_neg_dims_lx_planning_(pointwise|reduction)
-            - LxPlanning.*::test_flatten_3d_neg_full_lx_planning_(pointwise|reduction)
-            - LxPlanning.*::test_flatten_3d_noncontig_full_lx_planning_(pointwise|reduction)
-            - LxPlanning.*::test_flatten_3d_noncontig_partial_lx_planning_(pointwise|reduction)
-            - LxPlanning.*::test_flatten_3d_trailing_lx_planning_(pointwise|reduction)
-            - LxPlanning.*::test_flatten_4d_full_lx_planning_(pointwise|reduction)
-            - LxPlanning.*::test_flatten_4d_large_full_lx_planning_(pointwise|reduction)
-            - LxPlanning.*::test_flatten_4d_trailing_lx_planning_(pointwise|reduction)
+            # flatten_* LX cases now pass via the stick-misaligned reshape
+            # CPU-roundtrip reroute (PR #3001); promoted to the test_flatten.*
+            # mandatory_success block below. Three reduction cases still fail in
+            # the deeptools DDL backend ("more than one reduction dim is split
+            # across cores"), unrelated to the reshape reroute -- kept xfail
+            # here (4d_full) and at 3d_leading/4d_leading below.
+            - LxPlanning.*::test_flatten_4d_full_lx_planning_reduction
             - LxPlanning.*::test_unbind_1d_dim0_lx_planning_(pointwise|reduction)
             - LxPlanning.*::test_unbind_2d_dim0_lx_planning_(pointwise|reduction)
             - LxPlanning.*::test_unbind_2d_dim1_lx_planning_(pointwise|reduction)
