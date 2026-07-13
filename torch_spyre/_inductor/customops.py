@@ -528,6 +528,59 @@ def _(
     return input.new_empty(shape)
 
 
+@torch.library.custom_op("spyre::conv2d_via_cpu", mutates_args=(), device_types="spyre")
+def spyre_conv2d_via_cpu(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    bias: Optional[torch.Tensor],
+    stride: list[int],
+    padding: list[int],
+    dilation: list[int],
+    groups: int,
+) -> torch.Tensor:
+    """conv2d executed on CPU, for geometries whose on-device unfold+matmul
+    decomposition produces a compound stick expression the backend cannot
+    represent (see #3053 -- any stride>1 or non-same-padding geometry). Moves
+    inputs to CPU, runs the op, and copies the result back. Mirrors
+    ``spyre.reshape_via_cpu`` / ``spyre.unfold_via_cpu``. CPU ``conv2d`` never
+    re-enters the Spyre decomposition (it dispatches on the CPU device).
+    """
+    warn_fallback("torch.ops.spyre.conv2d_via_cpu")
+    device = input.device
+    bias_cpu = bias.to("cpu") if bias is not None else None
+    result_cpu = torch.conv2d(
+        input.to("cpu"),
+        weight.to("cpu"),
+        bias_cpu,
+        stride,
+        padding,
+        dilation,
+        groups,
+    )
+    return result_cpu.to(device)
+
+
+@spyre_conv2d_via_cpu.register_fake
+def _(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    bias: Optional[torch.Tensor],
+    stride: list[int],
+    padding: list[int],
+    dilation: list[int],
+    groups: int,
+) -> torch.Tensor:
+    # Compute the output shape directly (do NOT call conv2d here -- that would
+    # re-enter the Spyre convolution decomposition and recurse).
+    n = input.shape[0]
+    c_out = weight.shape[0]
+    k_h, k_w = weight.shape[2], weight.shape[3]
+    h_in, w_in = input.shape[2], input.shape[3]
+    h_out = (h_in + 2 * padding[0] - dilation[0] * (k_h - 1) - 1) // stride[0] + 1
+    w_out = (w_in + 2 * padding[1] - dilation[1] * (k_w - 1) - 1) // stride[1] + 1
+    return input.new_empty((n, c_out, h_out, w_out))
+
+
 @torch.library.custom_op("spyre::min_dim_int64_fallback", mutates_args=())
 def min_dim_int64_fallback(
     input: torch.Tensor, dim: int, keepdim: bool = False

@@ -15,6 +15,7 @@
 from contextlib import contextmanager
 
 import math
+import warnings
 from typing import Optional, Union, Sequence, Callable, TypeVar
 from typing_extensions import ParamSpec
 import torch
@@ -23,6 +24,7 @@ import torch._decomp as decomp
 
 from .constants import DEVICE_NAME, FP8_E4M3_MAX
 from .errors import Unsupported
+from torch_spyre.ops.fallbacks import FallbackWarning
 from . import customops  # noqa: F401
 from . import spyre_hint
 from torch_spyre._C import DataFormats, get_device_dtype
@@ -859,6 +861,36 @@ def conv2d_via_bmm_decomp(
     if C_in != groups * C_in_per_group:
         raise Unsupported(
             f"conv2d_via_bmm: expect C_in == groups * C_in_per_group, got C_in: {C_in}, groups: {groups} C_in_per_group: {C_in_per_group}"
+        )
+
+    # Only the stride-1, full-same-padding geometry lowers to a stick expression
+    # the backend can represent. Any other geometry (stride > 1, or non-same
+    # padding) makes the unfold+matmul access produce a compound stick expression
+    # (e.g. d2 + 8*Mod(3*d1, 8)) that propagate_spyre_tensor_layouts rejects
+    # (#3053). Route those through a CPU round-trip fallback -- correct, and cheap
+    # for the main affected case (vision patch embeds are a negligible fraction of
+    # tower FLOPs). The stride-1/same-padding path stays on the native bmm decomp.
+    same_pad_h = dil_h * (K_h - 1) // 2
+    same_pad_w = dil_w * (K_w - 1) // 2
+    native_ok = (
+        groups == 1
+        and stride_h == 1
+        and stride_w == 1
+        and pad_h == same_pad_h
+        and pad_w == same_pad_w
+        and K_h > 1
+        and K_w > 1
+    )
+    if not native_ok:
+        warnings.warn(
+            f"conv2d geometry (stride={list(stride)}, padding={list(padding)}, "
+            f"dilation={list(dilation)}) routed through a CPU round-trip "
+            "(spyre.conv2d_via_cpu): correctness fallback with a device<->host "
+            "copy cost; on-device support tracked by #3053",
+            category=FallbackWarning,
+        )
+        return torch.ops.spyre.conv2d_via_cpu(
+            input, weight, bias, stride, padding, dilation, groups
         )
 
     H_out = (H_in + 2 * pad_h - dil_h * (K_h - 1) - 1) // stride_h + 1
