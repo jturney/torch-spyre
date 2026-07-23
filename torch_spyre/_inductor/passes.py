@@ -16,6 +16,7 @@
 import inspect
 import io
 import logging
+import time
 from typing import Optional, Any, Callable
 
 import torch
@@ -49,6 +50,7 @@ from .coarse_tile import (
     hints_to_coarse_tile_groups,
     reorder_unhinted_interlopers,
     span_overflow_groups,
+    validate_coarse_tile_groups,
 )
 from . import config
 from .propagate_hints import (
@@ -305,6 +307,7 @@ def _runs(*passes: Callable) -> Callable[[Callable], Callable]:
     reorder_unhinted_interlopers,
     hints_to_coarse_tile_groups,
     span_overflow_groups,
+    validate_coarse_tile_groups,
     coarse_tile,
 )
 def _maybe_coarse_tile(graph: GraphLowering) -> None:
@@ -317,6 +320,7 @@ def _maybe_coarse_tile(graph: GraphLowering) -> None:
     if groups:
         op_order = {id(op): idx for idx, op in enumerate(graph.operations)}
         groups.sort(key=lambda group: op_order.get(id(group[0][0]), len(op_order)))
+        validate_coarse_tile_groups(groups)
         coarse_tile(graph, groups=groups)
 
 
@@ -392,7 +396,14 @@ class CustomPreSchedulingPasses:
             )
 
         for pass_fn in self.passes:
+            t0 = time.perf_counter()
             pass_fn(graph)
+            if logger.isEnabledFor(logging.INFO):
+                logger.info(
+                    "elapsed %5dms  %s",
+                    (time.perf_counter() - t0) * 1000,
+                    _get_pass_name(pass_fn),
+                )
 
             pass_name = _get_pass_name(pass_fn)
             if logger.isEnabledFor(logging.DEBUG) and _should_log_pass(pass_name):
