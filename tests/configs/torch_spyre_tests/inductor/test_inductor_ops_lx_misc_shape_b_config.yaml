@@ -29,16 +29,9 @@ test_suite_config:
             - LxPlanning.*::test_flatten_4d_full_lx_planning_(pointwise|reduction)
             - LxPlanning.*::test_flatten_4d_large_full_lx_planning_(pointwise|reduction)
             - LxPlanning.*::test_flatten_4d_trailing_lx_planning_(pointwise|reduction)
-            - LxPlanning.*::test_unbind_1d_dim0_lx_planning_(pointwise|reduction)
-            - LxPlanning.*::test_unbind_2d_dim0_lx_planning_(pointwise|reduction)
-            - LxPlanning.*::test_unbind_2d_dim1_lx_planning_(pointwise|reduction)
-            - LxPlanning.*::test_unbind_2d_dimneg1_lx_planning_(pointwise|reduction)
-            - LxPlanning.*::test_unbind_3d_dim0_lx_planning_(pointwise|reduction)
-            - LxPlanning.*::test_unbind_3d_dim1_lx_planning_(pointwise|reduction)
-            - LxPlanning.*::test_unbind_3d_dim2_lx_planning_(pointwise|reduction)
-            - LxPlanning.*::test_unbind_3d_dimneg1_lx_planning_(pointwise|reduction)
-            - LxPlanning.*::test_unbind_4d_dim0_lx_planning_(pointwise|reduction)
-            - LxPlanning.*::test_unbind_4d_dim3_lx_planning_(pointwise|reduction)
+            # unbind_* LX cases now pass via the unbind slice-view CPU-roundtrip
+            # reroute (this PR); promoted to the test_unbind.* mandatory_success
+            # block below.
             - LxPlanning.*::test_flatten_3d_leading_lx_planning_reduction
             - LxPlanning.*::test_flatten_4d_leading_lx_planning_reduction
             - LxPlanning.*::test_round_trip_to_dtype_add_float16_to_float32_4x8x128_lx_planning_reduction
