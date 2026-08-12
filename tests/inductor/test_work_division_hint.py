@@ -32,6 +32,7 @@ from torch._dynamo.test_case import (
 )
 from torch._functorch.aot_autograd import aot_module_simplified
 from torch._functorch._aot_autograd.utils import make_boxed_func
+from torch._inductor.dependencies import MemoryDep
 from torch._inductor.test_case import TestCase as InductorTestCase
 from torch._inductor.utils import run_and_get_code, InputType
 
@@ -581,6 +582,89 @@ def test_lx_relayout_activation_policy_is_source_wide():
     ):
         assert not lx_relayout_module._is_activation_source({}, producer)
         assert lx_relayout_module._is_activation_source({"input": dep}, producer)
+
+
+def test_lx_relayout_rejection_names_the_consumer_and_the_gate(caplog):
+    """One uncoverable read drops the whole source, and says which and why."""
+
+    class _Pointwise:
+        pass
+
+    class _Consumer:
+        def __init__(self, name):
+            self.name = name
+            self.data = _Pointwise()
+            self.layout = SimpleNamespace(device_layout=object())
+
+        def get_name(self):
+            return self.name
+
+    x, y = Symbol("x"), Symbol("y")
+    producer, good, bad = _Consumer("shared"), _Consumer("good"), _Consumer("bad")
+    write = MemoryDep("shared", 64 * x + y, (x, y), (2, 64))
+    read_good = MemoryDep("shared", 64 * x + y, (x, y), (2, 64))
+    read_bad = MemoryDep("shared", 64 * x + y, (x, y), (2, 64))
+    read_writes = {
+        "shared": SimpleNamespace(reads=[], writes=[write]),
+        "good": SimpleNamespace(reads=[read_good], writes=[]),
+        "bad": SimpleNamespace(reads=[read_bad], writes=[]),
+    }
+    views = {
+        producer: PerCoreView(((1, 2),), ((1, _CORE_ID),)),
+        good: PerCoreView(((1, 2),), ((1, 1 - _CORE_ID),)),
+        bad: PerCoreView(((0, 2),), ((0, _CORE_ID),)),
+    }
+    coordinates = [x, Mod(y, 64)]
+
+    with (
+        config.patch({"lx_planner_relayout": True, "ktir_emitter": False}),
+        mock_patch.object(lx_relayout_module, "ComputedBuffer", _Consumer),
+        mock_patch.object(lx_relayout_module, "Pointwise", _Pointwise),
+        mock_patch.object(lx_relayout_module, "FixedTiledLayout", SimpleNamespace),
+        mock_patch.object(
+            lx_relayout_module, "MutationLayoutSHOULDREMOVE", type("NoMut", (), {})
+        ),
+        mock_patch.object(
+            lx_relayout_module, "op_read_writes", lambda op: read_writes[op.get_name()]
+        ),
+        mock_patch.object(lx_relayout_module, "_single_write", lambda *_: write),
+        mock_patch.object(lx_relayout_module, "_is_matmul_op", lambda _: False),
+        mock_patch.object(lx_relayout_module, "_op_num_cores", lambda _: 2),
+        mock_patch.object(lx_relayout_module, "_is_activation_source", lambda *_: True),
+        mock_patch.object(
+            lx_relayout_module,
+            "_per_core_view_on_buf",
+            lambda op, *_: (views[op], False, True),
+        ),
+        mock_patch.object(
+            lx_relayout_module,
+            "iteration_space_from_op",
+            lambda _: {x: Integer(2), y: Integer(64)},
+        ),
+        mock_patch.object(
+            lx_relayout_module, "work_division_from_view", lambda *_: None
+        ),
+        mock_patch.object(
+            lx_relayout_module, "materialized_lx_relayouts", lambda _: {}
+        ),
+        # "bad" has no resolvable device coordinates, so the plan already made
+        # for "good" has to be abandoned with it.
+        mock_patch.object(
+            lx_relayout_module,
+            "try_device_coordinates",
+            lambda _layout, dep, _sizes: None if dep is read_bad else coordinates,
+        ),
+        caplog.at_level(logging.DEBUG, logger=lx_relayout_module.logger.name),
+    ):
+        plans = lx_relayout_module.collect_lx_relayout_plans(
+            SimpleNamespace(operations=[producer, good, bad])
+        )
+
+    assert plans == []
+    dropped = [r.getMessage() for r in caplog.records if "dropped" in r.getMessage()]
+    assert len(dropped) == 1, caplog.records
+    assert "shared" in dropped[0]
+    assert "bad read has no device coordinates" in dropped[0]
 
 
 def _compile_spec(spec, normalize=True):

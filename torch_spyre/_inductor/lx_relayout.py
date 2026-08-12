@@ -306,53 +306,80 @@ def collect_lx_relayout_plans(graph: GraphLowering) -> list[LXRelayoutPlan]:
 
         source_plans = []
         seen_consumers = set()
+        rejection = None
         for consumer, dep in consumer_reads:
             consumer_name = consumer.get_name()
-            if (
-                consumer_name in seen_consumers
-                or not isinstance(consumer, ComputedBuffer)
-                or isinstance(consumer.layout, MutationLayoutSHOULDREMOVE)
-            ):
+            if consumer_name in seen_consumers:
+                rejection = f"{consumer_name} reads {source_name} more than once"
+                break
+            if not isinstance(consumer, ComputedBuffer):
+                rejection = (
+                    f"{consumer_name} is {type(consumer).__name__}, "
+                    "not a ComputedBuffer"
+                )
+                break
+            if isinstance(consumer.layout, MutationLayoutSHOULDREMOVE):
+                rejection = f"{consumer_name} writes through a mutation alias"
                 break
             seen_consumers.add(consumer_name)
             deps = [
                 d for d in op_read_writes(consumer).reads if isinstance(d, MemoryDep)
             ]
             if any(d.is_indirect() for d in deps):
+                rejection = f"{consumer_name} uses indirect (gather/scatter) indices"
                 break
             view, consumer_partial, representable = _per_core_view_on_buf(
                 consumer, dep, source_name, cache
             )
-            if (
-                consumer_partial
-                or not representable
-                or _op_num_cores(consumer) != num_cores
-            ):
+            if consumer_partial:
+                rejection = f"{consumer_name} read leaves K-split partials"
+                break
+            if not representable:
+                rejection = f"{consumer_name} per-core view is not representable"
+                break
+            consumer_cores = _op_num_cores(consumer)
+            if consumer_cores != num_cores:
+                rejection = (
+                    f"{consumer_name} runs on {consumer_cores} cores, producer on "
+                    f"{num_cores}"
+                )
                 break
             consumer_coordinates = try_device_coordinates(
                 producer.layout.device_layout, dep, None
             )
             if consumer_coordinates is None:
+                rejection = f"{consumer_name} read has no device coordinates"
                 break
             consumer_symbols = tuple(iteration_space_from_op(consumer))
             try:
                 work_division_from_view(
                     source_view, consumer_coordinates, consumer_symbols
                 )
-            except ValueError:
+            except ValueError as error:
+                rejection = f"{consumer_name} cannot express the source view: {error}"
                 break
             if view == source_view:
                 continue
             is_matmul = _is_matmul_op(consumer)
             if is_matmul and len(deps) != 2:
+                rejection = (
+                    f"{consumer_name} is a matmul reading {len(deps)} operands, not 2"
+                )
                 break
             if not is_matmul and not isinstance(consumer.data, Pointwise):
+                rejection = (
+                    f"{consumer_name} is neither matmul nor pointwise "
+                    f"({type(consumer.data).__name__})"
+                )
                 break
-            if _relayout_geometry(source_view, view, num_cores).rejection():
+            geometry = _relayout_geometry(source_view, view, num_cores).rejection()
+            if geometry:
+                rejection = f"{consumer_name}: {geometry}"
                 break
             try:
                 work_division_from_view(view, consumer_coordinates, consumer_symbols)
-            except ValueError:
+            except ValueError as error:
+                rejection = f"{consumer_name} cannot express its own view: {error}"
                 break
             source_plans.append(
                 LXRelayoutPlan(
@@ -365,6 +392,19 @@ def collect_lx_relayout_plans(graph: GraphLowering) -> list[LXRelayoutPlan]:
             )
         else:
             result.extend(source_plans)
+            continue
+        # Reached only on a break, which abandons every plan for this source:
+        # partial coverage would let LX eligibility hide an uncovered division
+        # mismatch. Worth reporting only once an edge had been planned --
+        # otherwise the buffer was never a candidate and the noise would swamp
+        # the signal.
+        if source_plans:
+            logger.debug(
+                "dropped %d planned LX relayout edge(s) for %s: %s",
+                len(source_plans),
+                source_name,
+                rejection,
+            )
     return result
 
 
