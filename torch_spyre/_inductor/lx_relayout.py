@@ -156,9 +156,52 @@ def _overlap(a: int, an: int, b: int, bn: int) -> bool:
     return a * bn < (b + 1) * an and b * an < (a + 1) * bn
 
 
-def _compatible_partitions(
+@dataclasses.dataclass(frozen=True)
+class RelayoutGeometry:
+    """Peer-to-peer shape of one ownership change.
+
+    Keeps the fan-in and fan-out rather than collapsing them into a verdict, so
+    a caller can report which condition refused a pairing, and so a destination
+    that receives more than one source slice per core can be sized from the
+    fan-in.
+    """
+
+    num_cores: int
+    source_map: dict[int, dict[int, int]]
+    destination_map: dict[int, dict[int, int]]
+    source_splits: dict[int, int]
+    destination_splits: dict[int, int]
+    edges: set[tuple[int, int]]
+    fanout: list[int]
+    fanin: list[int]
+
+    def rejection(self) -> str | None:
+        """Which condition refuses this pairing, or ``None`` if none does."""
+        if not self.edges:
+            return "no source slice overlaps any destination slice"
+        if len(set(self.fanout)) != 1:
+            return f"non-uniform fan-out {sorted(set(self.fanout))}"
+        if len(set(self.fanin)) != 1:
+            return f"non-uniform fan-in {sorted(set(self.fanin))}"
+        for side, core_map, splits in (
+            ("source", self.source_map, self.source_splits),
+            ("destination", self.destination_map, self.destination_splits),
+        ):
+            owned = len({tuple(sorted(row.items())) for row in core_map.values()})
+            if owned != self.num_cores:
+                return (
+                    f"{side} view owns {owned} distinct slices across "
+                    f"{self.num_cores} cores"
+                )
+            product = math.prod(splits.values())
+            if product != self.num_cores:
+                return f"{side} splits multiply to {product}, not {self.num_cores}"
+        return None
+
+
+def _relayout_geometry(
     source: PerCoreView, destination: PerCoreView, num_cores: int
-) -> bool:
+) -> RelayoutGeometry:
     source_map = _core_slices(source, num_cores)
     destination_map = _core_slices(destination, num_cores)
     source_splits = dict(source.work_slice_dims)
@@ -178,19 +221,15 @@ def _compatible_partitions(
             for dim in dims
         )
     }
-    fanout = [sum(src == core for src, _ in edges) for core in range(num_cores)]
-    fanin = [sum(dst == core for _, dst in edges) for core in range(num_cores)]
-    return bool(edges) and all(
-        (
-            len(set(fanout)) == 1,
-            len(set(fanin)) == 1,
-            len({tuple(sorted(row.items())) for row in source_map.values()})
-            == num_cores,
-            len({tuple(sorted(row.items())) for row in destination_map.values()})
-            == num_cores,
-            math.prod(source_splits.values()) == num_cores,
-            math.prod(destination_splits.values()) == num_cores,
-        )
+    return RelayoutGeometry(
+        num_cores=num_cores,
+        source_map=source_map,
+        destination_map=destination_map,
+        source_splits=source_splits,
+        destination_splits=destination_splits,
+        edges=edges,
+        fanout=[sum(src == core for src, _ in edges) for core in range(num_cores)],
+        fanin=[sum(dst == core for _, dst in edges) for core in range(num_cores)],
     )
 
 
@@ -309,7 +348,7 @@ def collect_lx_relayout_plans(graph: GraphLowering) -> list[LXRelayoutPlan]:
                 break
             if not is_matmul and not isinstance(consumer.data, Pointwise):
                 break
-            if not _compatible_partitions(source_view, view, num_cores):
+            if _relayout_geometry(source_view, view, num_cores).rejection():
                 break
             try:
                 work_division_from_view(view, consumer_coordinates, consumer_symbols)
