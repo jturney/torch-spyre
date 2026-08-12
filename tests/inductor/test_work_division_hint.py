@@ -16,7 +16,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 import logging
 import logging.handlers
-import re
+import regex as re
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch as mock_patch
