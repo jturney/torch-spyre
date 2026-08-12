@@ -736,6 +736,103 @@ def test_lx_relayout_normalizes_ownership_and_lowers_only_in_superdsc():
     assert core_three == {inner: 1, outer: 1}
 
 
+def _folds(node):
+    """Per-dim core and element-array fold factors from one allocate node."""
+    return {
+        dim: {
+            "core_fold": next(
+                attr["factor_"]
+                for attr in meta["folds"]["dim_prop_attr"]
+                if attr["label_"] == "core_fold"
+            ),
+            "elem_arr": [
+                attr["factor_"]
+                for attr in meta["folds"]["dim_prop_attr"]
+                if attr["label_"].startswith("elem_arr")
+            ],
+        }
+        for dim, meta in node["coordinates_"]["coordInfo"].items()
+    }
+
+
+def test_lx_relayout_folds_share_element_arrays_across_ownership():
+    """Pin the fold factors for a relayout whose two sides split differently.
+
+    The permutation case above keeps both sides on the same 8-way split. Here a
+    4x8 producer feeds a 32-way destination, so the ownership genuinely differs
+    -- and the invariant worth pinning is that the two sides still present the
+    *same* element arrays, expressing the difference only through core_fold and
+    coreIdToWkSlice_.
+
+    That is what makes one loop nest serve both tensors. An earlier revision
+    emitted per-side element arrays instead (mb 128 against 16 here), and
+    DeepTools rejected the descriptor with "[distributeElemArrToTemporalLoops]
+    Not enough elements to distribute" because the cardinalities disagreed along
+    a looped dim. No per-core-slice assertion can see that; these can.
+    """
+
+    m, n = Symbol("m"), Symbol("n")
+    source_view = PerCoreView(
+        ((0, 4), (1, 8)), ((0, floor(_CORE_ID / 8)), (1, Mod(_CORE_ID, 8)))
+    )
+    destination_view = PerCoreView(((0, 32),), ((0, _CORE_ID),))
+    coordinates = [m, floor(n / 64), Mod(n, 64)]
+    base = TensorArg(
+        True, -1, DataFormats.SEN169_FP16, [512, 200, 64], coordinates, {"lx": 0}
+    )
+    spec = OpSpec(
+        IDENTITY_OP,
+        False,
+        {m: (512, 32), n: (12800, 1)},
+        [
+            replace(
+                base,
+                work_division=work_division_from_view(source_view, coordinates, (m, n)),
+            ),
+            replace(
+                base,
+                is_input=False,
+                allocation={"lx": 0x44000},
+                work_division=work_division_from_view(
+                    destination_view, coordinates, (m, n)
+                ),
+            ),
+        ],
+        {},
+    )
+    root, allocations = _compile_spec(spec)
+
+    assert set(root["dscs_"][0]) == {"shuffle"}
+    assert root["numCoresUsed_"] == 32
+
+    # Derived from the declared views rather than transcribed: the source owns
+    # (core // 8, core % 8) of a 4x8 split, the destination (core, 0) of 32.
+    source_map, destination_map = (
+        node["coordinates_"]["coreIdToWkSlice_"] for node in allocations
+    )
+    assert source_map == {
+        str(core): {"mb": core // 8, "out": core % 8} for core in range(32)
+    }
+    assert destination_map == {str(core): {"mb": core, "out": 0} for core in range(32)}
+
+    source_folds, destination_folds = (_folds(node) for node in allocations)
+    assert source_folds == {
+        "mb": {"core_fold": 4, "elem_arr": [16]},
+        "out": {"core_fold": 8, "elem_arr": [200, 64]},
+    }
+    assert destination_folds == {
+        "mb": {"core_fold": 32, "elem_arr": [16]},
+        "out": {"core_fold": 1, "elem_arr": [200, 64]},
+    }
+    # The load-bearing part: element arrays agree, only core_fold differs.
+    assert {dim: f["elem_arr"] for dim, f in source_folds.items()} == {
+        dim: f["elem_arr"] for dim, f in destination_folds.items()
+    }
+    assert {dim: f["core_fold"] for dim, f in source_folds.items()} != {
+        dim: f["core_fold"] for dim, f in destination_folds.items()
+    }
+
+
 @config.patch(
     {
         "sencores": 8,
