@@ -1131,7 +1131,12 @@ def _output_stride_to_device_size(op: Operation) -> dict[int, int]:
     splittable size for an output dim by its coefficient in the write index.
     (Mirrors _per_core_view_on_buf's stride→device-dim placement.)
     """
-    dev_layout = op.layout.device_layout
+    layout = op.layout
+    if isinstance(layout, MutationLayoutSHOULDREMOVE):
+        # In-place mutations keep the mutation wrapper at pre-scheduler time;
+        # the committed device layout lives on the mutation target.
+        layout = layout.real_layout()
+    dev_layout = layout.device_layout
     device_size = dev_layout.device_size
     stride_map = dev_layout.stride_map
     elems_per_stick = dev_layout.device_dtype.elems_per_stick()
