@@ -69,8 +69,8 @@ ktir_device_mlir: str = os.environ.get("KTIR_DEVICE_MLIR", "")
 lx_planner_relayout: bool = _get_env_bool("SPYRE_LX_PLANNER_RELAYOUT", True)
 
 # Enumerate priced relayout candidates per division pair for the CP-SAT joint
-# solver. Off by default: nothing consumes the tables yet, and the feature
-# stays opt-in until the solver can also materialize what it decides.
+# solver, which decides each edge against the fitted shuffle cost. Off by
+# default until the solver can also materialize what it decides.
 lx_solver_relayout: bool = _get_env_bool("SPYRE_LX_SOLVER_RELAYOUT", False)
 
 allow_all_ops_in_lx_planning: bool = False
