@@ -676,8 +676,8 @@ def _relayout_feats(bytes_, cores, run_bytes, split):
         cores=cores,
         dtype_bytes=2,
         args=[
-            ArgTraffic("buf_copy", "output", "lx", elems, False, [], []),
-            ArgTraffic("buf_src", "input", "lx", elems, False, [], []),
+            ArgTraffic("buf_copy", "output", True, elems, False, [], []),
+            ArgTraffic("buf_src", "input", True, elems, False, [], []),
         ],
         is_lx_relayout=True,
         relayout_run_elems=run_bytes // 2,
