@@ -680,7 +680,6 @@ def _relayout_feats(bytes_, cores, run_bytes, split):
             ArgTraffic("buf_src", "input", "lx", elems, False, [], []),
         ],
         is_lx_relayout=True,
-        relayout_bytes=bytes_,
         relayout_run_elems=run_bytes // 2,
         relayout_split=split,
     )
@@ -729,7 +728,6 @@ def test_relayout_fields_survive_schema_roundtrip_and_old_records():
     d = cost_model.op_to_dict(f)
     for key in (
         "is_lx_relayout",
-        "relayout_bytes",
         "relayout_run_elems",
         "relayout_split",
     ):

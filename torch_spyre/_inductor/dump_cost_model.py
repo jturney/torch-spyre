@@ -487,8 +487,8 @@ def _per_core_run(view, device_dims) -> tuple:
     return (device_dims[d] // splits[d]) * inner, splits[d]
 
 
-def _relayout_features(op, out_elems, dtype_bytes, out_dims):
-    """(is_lx_relayout, relayout_bytes, relayout_run_elems, relayout_split) for one op.
+def _relayout_features(op, out_dims):
+    """(is_lx_relayout, relayout_run_elems, relayout_split) for one op.
 
     The materialization registry is the authority: an op is a relayout copy iff the
     scratchpad planner registered it (``graph._spyre_lx_relayout_copies``), so a plan
@@ -497,7 +497,7 @@ def _relayout_features(op, out_elems, dtype_bytes, out_dims):
     the term's law is direction-symmetric (measured: 8.721 vs 8.701 us reversed), so
     which side is source does not matter. All-zeros for every other op.
     """
-    zeros = (False, 0, 0, 0)
+    zeros = (False, 0, 0)
     try:
         from torch._inductor.virtualized import V
 
@@ -522,7 +522,7 @@ def _relayout_features(op, out_elems, dtype_bytes, out_dims):
         run_elems, split = min(src, dst, key=lambda t: (t[0], -t[1]))
         if run_elems <= 0 or split <= 0:
             return zeros
-        return True, out_elems * dtype_bytes, run_elems, split
+        return True, run_elems, split
     except Exception:  # noqa: BLE001 - a diagnostic feature must not sink a compile
         return zeros
 
@@ -722,7 +722,7 @@ def extract_op_features(
             )
         )
 
-    _rl = _relayout_features(op, out_elems, dtype_bytes, out_dims)
+    _rl = _relayout_features(op, out_dims)
 
     return OpFeatures(
         name=_op_name(op),
@@ -746,9 +746,8 @@ def extract_op_features(
         matmul_n_split=matmul_n_split,
         hbm_pattern="" if is_matmul else _hbm_pattern(op, is_reduction, out_dims),
         is_lx_relayout=_rl[0],
-        relayout_bytes=_rl[1],
-        relayout_run_elems=_rl[2],
-        relayout_split=_rl[3],
+        relayout_run_elems=_rl[1],
+        relayout_split=_rl[2],
     )
 
 

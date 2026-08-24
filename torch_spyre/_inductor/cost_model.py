@@ -237,9 +237,12 @@ class OpFeatures:
     # 2.3-24.2 us at 2.1 MB / 8 cores depending on slice geometry alone, so it gets an
     # additive term (see ``relayout_ns`` in predict_ops) keyed on these features.
     # ``is_lx_relayout`` derives from the planner's materialization registry, never
-    # inferred; the other three are 0 when it is False.
+    # inferred; the other two are 0 when it is False. The bytes moved are NOT a
+    # separate feature: a relayout copy is an identity clone, so they are exactly
+    # ``out_elems * dtype_bytes`` (grouped gathers (#3440) will multiply by
+    # ``cores / owners`` via a future ``relayout_owners`` feature, not by a bytes
+    # field).
     is_lx_relayout: bool = False
-    relayout_bytes: int = 0  # device bytes moved (output device_size x dtype)
     # Per-core contiguous run, in ELEMENTS, of the finer (governing) of the two
     # PerCoreViews: (device_size[d] // split[d]) * prod(device_size[d+1:]) for the
     # innermost split dim d. The 10x-at-fixed-bytes variable.
@@ -1040,11 +1043,12 @@ def relayout_ns(o: "OpFeatures", params: "CostParams | None" = None) -> float:
     error instead of extrapolating an unmeasured log2.
     """
     p = params or CostParams()
-    if not o.is_lx_relayout or o.relayout_bytes <= 0:
+    if not o.is_lx_relayout or o.out_elems <= 0:
         return 0.0
     if o.relayout_run_elems <= 0 or o.cores <= 0:
         return 0.0
-    per_core = o.relayout_bytes / o.cores
+    # Bytes moved == the copy's device bytes: a relayout is an identity clone.
+    per_core = o.out_elems * o.dtype_bytes / o.cores
     run_bytes = o.relayout_run_elems * o.dtype_bytes
     split = min(8, max(2, o.relayout_split))
     runs = per_core / run_bytes
