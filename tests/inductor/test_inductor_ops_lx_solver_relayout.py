@@ -19,7 +19,8 @@ Re-wraps the two LX-planning wrap classes from
 
 - ``layout_solver = "cpsat"``: joint core-division + LX placement solving
 - ``co_optimizing_lx_planning = True``: divisions chosen with the cost model
-- ``lx_solver_relayout = True``: relayout decisions made inside the solver
+- ``lx_solver_relayout = True``: pinned on explicitly (it is the default;
+  the pin keeps this lane meaningful even if the default ever changes)
 
 Everything else (the two-op wraps, canonical-subset selection via
 ``TEST_LX_PLANNING_FULL``, tolerances) matches the LX-planning wrapper, so any
