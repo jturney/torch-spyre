@@ -73,9 +73,17 @@ class SolverRelayoutTwoOpReductionTest(_lx._LxPlanningTwoOpTestBase):
 
 def _build_wrap_class(dst_cls, src_cls):
     """Give ``dst_cls`` the two-op wrap behavior of ``src_cls`` plus the
-    solver-relayout config patches around every test, all as own attributes."""
-    for attr in ("wrap", "_wrap_atol_floor"):
-        setattr(dst_cls, attr, getattr(src_cls, attr))
+    solver-relayout config patches around every test, all as own attributes.
+
+    Carries the LX-planning file's INHERITED_TEST_ATTRIBUTES as well: those
+    helpers (dtype support, the invalid-dim case lists) live on the concrete
+    wrap classes rather than the abstract base, and tests call them through
+    self, so a wrap class without them fails with AttributeError."""
+    for attr in ("wrap", "_wrap_atol_floor", *_lx.INHERITED_TEST_ATTRIBUTES):
+        # hasattr guard mirrors _copy_inherited_methods: not every helper in
+        # INHERITED_TEST_ATTRIBUTES exists on every wrap class.
+        if hasattr(src_cls, attr):
+            setattr(dst_cls, attr, getattr(src_cls, attr))
     patched = make_test_cls_with_patches(
         src_cls, "SolverRelayout", "", *_SOLVER_RELAYOUT_PATCHES
     )

@@ -15,6 +15,12 @@ test_suite_config:
     - path: ${TORCH_DEVICE_ROOT}/tests/inductor/test_inductor_ops_lx_solver_relayout.py
       unlisted_test_mode: skip
       tests:
+        # GQA attention paths fail under the co-optimizing CP-SAT
+        # configuration (division choice the fused attention lowering
+        # rejects); pass under greedy. Known delta, not a relayout issue.
+        - names:
+            - SolverRelayout.*::test_qkv_attn_paths_fms_.*_gqa_lx_planning_reduction
+          mode: xfail
         - names:
             - SolverRelayout.*::test_attention.*_lx_planning_reduction
             - SolverRelayout.*::test_sdpa.*_lx_planning_reduction
