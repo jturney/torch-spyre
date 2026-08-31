@@ -22,9 +22,26 @@ Re-wraps the two LX-planning wrap classes from
 - ``lx_solver_relayout = True``: relayout decisions made inside the solver
 
 Everything else (the two-op wraps, canonical-subset selection via
-``TEST_LX_PLANNING_FULL``, tolerances) is inherited from the LX-planning
-wrapper, so any difference between this suite and the LX-planning suite is
-attributable to the solver configuration alone.
+``TEST_LX_PLANNING_FULL``, tolerances) matches the LX-planning wrapper, so any
+difference between this suite and the LX-planning suite is attributable to
+the solver configuration alone.
+
+Structure notes, hard-won against the OOT CI runner; mirror the shape of
+``test_inductor_ops_lx_planning.py`` exactly:
+
+- The classes must be plain ``class`` statements whose DIRECT base name
+  contains "TestCase" or ends in "TestBase": the runner's AST analyzer only
+  recognizes those, and an unrecognized file runs raw with its YAML shard
+  config silently ignored.
+- The base must carry NO test methods. ``instantiate_device_type_tests``
+  deletes the generic class's OWN tests after building the gated device
+  class, but tests INHERITED from a concrete parent survive through the MRO
+  and are collected ungated alongside the gated ones.
+- The patched tests are therefore installed as OWN attributes here, and
+  ``wrap`` / ``_wrap_atol_floor`` are copied from the concrete LX-planning
+  classes (``make_test_cls_with_patches`` cannot carry them: it builds from
+  the source class's bases, and the abstract base's ``wrap`` raises
+  NotImplementedError).
 """
 
 import os
@@ -39,24 +56,38 @@ sys.path.append(_test_dir)
 
 import inductor.test_inductor_ops_lx_planning as _lx  # noqa: E402
 
+_SOLVER_RELAYOUT_PATCHES = (
+    (torch_spyre._inductor.config, "layout_solver", "cpsat"),
+    (torch_spyre._inductor.config, "co_optimizing_lx_planning", True),
+    (torch_spyre._inductor.config, "lx_solver_relayout", True),
+)
 
-def make_solver_relayout_class(cls):
-    return make_test_cls_with_patches(
-        cls,
-        "SolverRelayout",
-        "",
-        (torch_spyre._inductor.config, "layout_solver", "cpsat"),
-        (torch_spyre._inductor.config, "co_optimizing_lx_planning", True),
-        (torch_spyre._inductor.config, "lx_solver_relayout", True),
+
+class SolverRelayoutTwoOpPointwiseAdditionTest(_lx._LxPlanningTwoOpTestBase):
+    pass
+
+
+class SolverRelayoutTwoOpReductionTest(_lx._LxPlanningTwoOpTestBase):
+    pass
+
+
+def _build_wrap_class(dst_cls, src_cls):
+    """Give ``dst_cls`` the two-op wrap behavior of ``src_cls`` plus the
+    solver-relayout config patches around every test, all as own attributes."""
+    for attr in ("wrap", "_wrap_atol_floor"):
+        setattr(dst_cls, attr, getattr(src_cls, attr))
+    patched = make_test_cls_with_patches(
+        src_cls, "SolverRelayout", "", *_SOLVER_RELAYOUT_PATCHES
     )
+    for name, value in list(patched.__dict__.items()):
+        if name.startswith("test_"):
+            setattr(dst_cls, name, value)
 
 
-SolverRelayoutTwoOpPointwiseAdditionTest = make_solver_relayout_class(
-    _lx.LxPlanningTwoOpPointwiseAdditionTest
+_build_wrap_class(
+    SolverRelayoutTwoOpPointwiseAdditionTest, _lx.LxPlanningTwoOpPointwiseAdditionTest
 )
-SolverRelayoutTwoOpReductionTest = make_solver_relayout_class(
-    _lx.LxPlanningTwoOpReductionTest
-)
+_build_wrap_class(SolverRelayoutTwoOpReductionTest, _lx.LxPlanningTwoOpReductionTest)
 
 
 if __name__ == "__main__":

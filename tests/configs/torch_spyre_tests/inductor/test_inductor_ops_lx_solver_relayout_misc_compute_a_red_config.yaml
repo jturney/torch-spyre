@@ -1,4 +1,10 @@
 # Solver-relayout sweep shard: mirrors test_inductor_ops_lx_misc_compute_a_config.yaml but runs
+# Split by wrap suffix so each shard fits the 60 minute job budget: the
+# CP-SAT co-optimizing configuration compiles roughly 2.5x slower per test
+# than the greedy LX shards this file mirrors. The split keys on the
+# _lx_planning_{pointwise,reduction} METHOD suffix: the OOT runner strips
+# the ClassName:: prefix from `names:` entries and matches bare method
+# names, so a class-name split does not select anything.
 # tests/inductor/test_inductor_ops_lx_solver_relayout.py, the LX-planning
 # wrap re-wrapped with layout_solver=cpsat, co_optimizing_lx_planning=True
 # and lx_solver_relayout=True. The xfail floor is inherited from the
@@ -19,15 +25,15 @@ test_suite_config:
             - SolverRelayout.*::test_add_alpha_add_alpha_neg_67x71x256_67x71x256_lx_planning_reduction
           mode: xfail
         - names:
-            - SolverRelayout.*::test_activation_cls.*_lx_planning_(pointwise|reduction)
-            - SolverRelayout.*::test_activation_fn.*_lx_planning_(pointwise|reduction)
-            - SolverRelayout.*::test_relu_inplace.*_lx_planning_(pointwise|reduction)
-            - SolverRelayout.*::test_add_broadcast.*_lx_planning_(pointwise|reduction)
-            - SolverRelayout.*::test_add_alpha.*_lx_planning_(pointwise|reduction)
-            - SolverRelayout.*::test_add_scalar.*_lx_planning_(pointwise|reduction)
-            - SolverRelayout.*::test_max_sub_broadcast.*_lx_planning_(pointwise|reduction)
-            - SolverRelayout.*::test_sub_alpha.*_lx_planning_(pointwise|reduction)
-            - SolverRelayout.*::test_sub_broadcast.*_lx_planning_(pointwise|reduction)
-            - SolverRelayout.*::test_sub_scalar.*_lx_planning_(pointwise|reduction)
-            - SolverRelayout.*::test_scalar_cpu.*_lx_planning_(pointwise|reduction)
+            - SolverRelayout.*::test_activation_cls.*_lx_planning_reduction
+            - SolverRelayout.*::test_activation_fn.*_lx_planning_reduction
+            - SolverRelayout.*::test_relu_inplace.*_lx_planning_reduction
+            - SolverRelayout.*::test_add_broadcast.*_lx_planning_reduction
+            - SolverRelayout.*::test_add_alpha.*_lx_planning_reduction
+            - SolverRelayout.*::test_add_scalar.*_lx_planning_reduction
+            - SolverRelayout.*::test_max_sub_broadcast.*_lx_planning_reduction
+            - SolverRelayout.*::test_sub_alpha.*_lx_planning_reduction
+            - SolverRelayout.*::test_sub_broadcast.*_lx_planning_reduction
+            - SolverRelayout.*::test_sub_scalar.*_lx_planning_reduction
+            - SolverRelayout.*::test_scalar_cpu.*_lx_planning_reduction
           mode: mandatory_success
