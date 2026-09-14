@@ -746,18 +746,27 @@ class TestSpyreTensorLayout(TestCase):
             list(_qfp8ch_stl(two_sticks, torch.float8_e4m3fn).device_size), [1, 4, 128]
         )
 
-    def test_explicit_layout_rejects_non_positive_device_size(self):
+    def test_explicit_layout_rejects_malformed_device_size(self):
         """The explicit (device_size, stride_map) constructor validates the one
-        invariant every consumer assumes: positive device dims, one stride_map
-        entry each. A hand-built or compiler-built layout with a size-0 dim is
-        rejected at construction instead of crashing the process later."""
+        invariant every consumer assumes: non-negative device dims, one
+        stride_map entry each. A negative dim is rejected at construction
+        instead of crashing the process later. A size-0 dim is how an empty
+        tensor is laid out and stays legal; the degenerate size-0 dim behind
+        issue #3604 is refused by rescale_stl_for_dtype instead."""
         from torch_spyre._C import ElementArrangement
 
         fp16 = get_device_dtype(torch.float16)
-        with self.assertRaisesRegex(RuntimeError, "device dimension 0 has size 0"):
+        with self.assertRaisesRegex(
+            RuntimeError, "device dimension 0 has negative size -1"
+        ):
             SpyreTensorLayout(
-                [0, 4, 64], [64, 32, 1], fp16, ElementArrangement.STANDARD
+                [-1, 4, 64], [64, 32, 1], fp16, ElementArrangement.STANDARD
             )
+        empty = SpyreTensorLayout(
+            [0, 4, 64], [64, 32, 1], fp16, ElementArrangement.STANDARD
+        )
+        self.assertEqual(list(empty.device_size), [0, 4, 64])
+        self.assertEqual(get_device_size_in_bytes(empty), 0)
         with self.assertRaisesRegex(RuntimeError, "stride_map has 2 entries for 3"):
             SpyreTensorLayout([1, 4, 64], [64, 1], fp16, ElementArrangement.STANDARD)
         # -1 (size-1 / sparse) and 0 (broadcast) stride entries stay legal.
