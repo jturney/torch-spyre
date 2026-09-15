@@ -2687,7 +2687,7 @@ class CoOptimizingAllocator(ScratchpadAllocator):
                     else BufferType.Intermediate,
                 )
             )
-        buffers.extend(self._relayout_copy_buffers(buffers))
+        buffers.extend(self._relayout_copy_buffers(buffers, self.size))
         return buffers
 
     @staticmethod
@@ -2746,12 +2746,20 @@ class CoOptimizingAllocator(ScratchpadAllocator):
     @staticmethod
     def _relayout_copy_buffers(
         buffers: Sequence[CoreDivisionBuffer],
+        capacity: int | None = None,
     ) -> list[RelayoutCopyBuffer]:
         """One :class:`RelayoutCopyBuffer` per relayout group enumerated across
         ``buffers``: the destination the solver places, live from the group's
         first consumer to its last, carrying every priced candidate that lands
         on it. A group whose source is not among the buffers has nothing to
         shuffle from and gets no copy; the solver then ignores its candidates.
+
+        ``capacity`` is the planner's per-core LX budget. A group whose
+        destination span alone exceeds it can never be resident, so building a
+        copy for it only adds a buffer the solver must place and prove out; such
+        groups get no copy either (the residency gate ignores candidates whose
+        group has none). On the 304-op decode attention graph these copies are a
+        measurable share of a model whose presolve alone outlived the time limit.
         """
         by_name = {b.name: b for b in buffers}
         groups: dict[tuple[str, int], list[RelayoutCandidate]] = {}
@@ -2761,6 +2769,7 @@ class CoOptimizingAllocator(ScratchpadAllocator):
                     groups.setdefault(candidate.group_key, []).append(candidate)
         ticks = {b.name: b.start_time for b in buffers}
         copies: list[RelayoutCopyBuffer] = []
+        oversized = 0
         for (parent, group), candidates in sorted(groups.items()):
             source = by_name.get(parent)
             if source is None:
@@ -2771,7 +2780,18 @@ class CoOptimizingAllocator(ScratchpadAllocator):
                     group,
                 )
                 continue
-            copies.append(build_relayout_copy(source, group, candidates, ticks))
+            copy = build_relayout_copy(source, group, candidates, ticks)
+            if capacity is not None and copy.per_core_footprint > capacity:
+                oversized += 1
+                continue
+            copies.append(copy)
+        if oversized:
+            logger.debug(
+                "[lx solver relayout] %d relayout group(s) skipped: destination "
+                "span exceeds the %d-byte LX budget",
+                oversized,
+                capacity,
+            )
         return copies
 
     def _eligible_clone_inputs(

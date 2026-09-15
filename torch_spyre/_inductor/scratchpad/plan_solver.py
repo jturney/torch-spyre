@@ -447,6 +447,12 @@ class RelayoutCopyBuffer(CoreDivisionBuffer):
         return self.relayout_parent, self.group
 
     @property
+    def per_core_footprint(self) -> int:
+        """The destination span: what one core must hold for the copy to be
+        resident (``size`` is that span times the destination core count)."""
+        return ceil_div(self.size, self.num_cores)
+
+    @property
     def consumers(self) -> tuple[str, ...]:
         return tuple(sorted({c.consumer for c in self.candidates}))
 
