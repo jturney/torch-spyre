@@ -219,6 +219,8 @@ class SaCoOptimizingSolver(CoreDivisionLayoutSolver):
         """
         if cost_expr is None:
             return None
+        # The engine's share of the objective: the relayout copies' prices.
+        cost_expr = cost_expr + self.relayout_price_expr()
         value_of: dict = {}  # sympy.Symbol -> (chosen, resident) -> number
         for idx, buf in enumerate(self._bufs):
             value_of[buf.sym_is_lx] = lambda chosen, resident, name=buf.name: (

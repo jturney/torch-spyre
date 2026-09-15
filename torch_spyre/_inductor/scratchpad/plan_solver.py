@@ -720,6 +720,15 @@ class CoreDivisionLayoutSolver(MemoryPlanSolver):
     # others never see a copy and their objective carries no relayout term.
     decides_lx_relayouts: bool = False
 
+    def relayout_price_expr(self) -> sympy.Expr:
+        """Every relayout copy's :meth:`RelayoutCopyBuffer.cost_term`, summed:
+        the symbolic form of the shuffle prices, for engines that evaluate the
+        objective as a sympy expression."""
+        return sum(
+            (b.cost_term() for b in self.buffers if isinstance(b, RelayoutCopyBuffer)),
+            sympy.Integer(0),
+        )
+
     @abstractmethod
     def plan_layout_and_core_divisions(
         self, cost_expr: sympy.Expr | None = None
@@ -730,6 +739,12 @@ class CoreDivisionLayoutSolver(MemoryPlanSolver):
         index of the chosen division back to ``chosen_division`` for the
         allocator to commit. Operates on :attr:`buffers`, each of which must
         carry its enumerated candidate core divisions.
+
+        ``cost_expr`` carries no relayout price: the engine charges its
+        :class:`RelayoutCopyBuffer` copies itself, either symbolically through
+        :meth:`relayout_price_expr` (the annealer) or natively (CP-SAT, whose
+        generic lowering of ``cost_term`` -- one boolean product per copy and
+        priced source division -- dominated presolve on large graphs).
 
         Returns:
             The same buffers, with placements and chosen divisions defined.

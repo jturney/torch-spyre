@@ -2121,19 +2121,11 @@ class CoOptimizingAllocator(ScratchpadAllocator):
                 raise
             cost_expr = None
 
-        # One price term per relayout copy (a source and one destination view,
-        # however many consumers share it): the fitted shuffle cost of the
-        # source's chosen division, charged while the copy is resident. Built
-        # from symbols every engine binds (is_lx, division), so the objective
-        # stays self-describing. Skipped when the bundle scoring failed: the
-        # solver then runs its fallback objective, under which every copy is
-        # pinned out.
-        if cost_expr is not None:
-            for copy in sorted(
-                (b for b in solver.buffers if isinstance(b, RelayoutCopyBuffer)),
-                key=lambda b: b.name,
-            ):
-                cost_expr = cost_expr + copy.cost_term()
+        # The relayout copies' prices are NOT part of cost_expr: each engine
+        # charges its RelayoutCopyBuffers itself (CP-SAT natively, the annealer
+        # through relayout_price_expr), see plan_layout_and_core_divisions. When
+        # the bundle scoring failed the solver runs its fallback objective,
+        # under which every copy is pinned out.
         result = solver.plan_layout_and_core_divisions(cost_expr)
         assert not any(buffer.lx_relayout_plans for buffer in result), (
             "CoOptimizingAllocator does not support LX relayout"
