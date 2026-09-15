@@ -519,7 +519,7 @@ def build_relayout_copy(
         name=relayout_copy_name(parent.name, group),
         size=spans.pop() * num_cores,
         uses=sorted({consumer_ticks[c.consumer] for c in ordered}),
-        core_divisions=[CoreDivision(output_splits={"relayout_copy": num_cores})],
+        core_divisions=[CoreDivision(splits={"relayout_copy": num_cores})],
         relayout_parent=parent.name,
         group=group,
         candidates=ordered,

@@ -98,9 +98,7 @@ def _producer(uses, divisions=1) -> CoreDivisionBuffer:
         "P",
         64,
         uses,
-        core_divisions=[
-            CoreDivision(output_splits={1 - d: 4}) for d in range(divisions)
-        ],
+        core_divisions=[CoreDivision(splits={1 - d: 4}) for d in range(divisions)],
     )
 
 
@@ -109,7 +107,7 @@ def _consumer(name, start, end, candidates, *, matches=()) -> CoreDivisionBuffer
         name,
         64,
         [start, end],
-        core_divisions=[CoreDivision(output_splits={1: 4})],
+        core_divisions=[CoreDivision(splits={1: 4})],
         parents=["P"],
         cd_parent_matches={"P": list(matches)},
         cd_parent_relayouts={"P": list(candidates)} if candidates else {},
@@ -373,7 +371,7 @@ def _distant(relayout_cost_ns, blocker_size):
             "B",
             blocker_size,
             [3, 7],
-            core_divisions=[CoreDivision(output_splits={1: 1})],
+            core_divisions=[CoreDivision(splits={1: 1})],
         ),
     )
 
