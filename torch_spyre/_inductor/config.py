@@ -93,6 +93,17 @@ lx_planner_relayout: bool = os.getenv("SPYRE_LX_PLANNER_RELAYOUT", "1").lower() 
     "yes",
 )
 
+# How many destination views the CP-SAT relayout enumeration keeps per
+# (source, consumer) edge, cheapest first: a consumer with many equal-core
+# divisions induces one distinct destination partition (one relayout copy the
+# solver must place) per division, though it will read through at most one.
+# On the spyre_attn decode graph with 16 unrolled KV blocks the unbounded
+# enumeration built 5789 copies and CP-SAT's presolve outlived the time limit.
+# 0 keeps every view.
+lx_solver_relayout_groups_per_edge: int = int(
+    os.getenv("SPYRE_LX_SOLVER_RELAYOUT_GROUPS_PER_EDGE", "4")
+)
+
 # Submit independent DXP kernel compilations to Inductor's subprocess pool and
 # resolve them together at the generated wrapper's async_compile.wait() barrier.
 # This is opt-in while the parallel path is evaluated on full model compiles.

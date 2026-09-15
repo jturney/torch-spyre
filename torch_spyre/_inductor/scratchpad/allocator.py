@@ -2921,6 +2921,51 @@ class CoOptimizingAllocator(ScratchpadAllocator):
             )
         return matches
 
+    @staticmethod
+    def _cap_relayout_groups(
+        parent: str,
+        consumer: str,
+        candidates: list[RelayoutCandidate],
+        consumer_divs: list[CoreDivision],
+    ) -> list[RelayoutCandidate]:
+        """Keep the candidates of the ``config.lx_solver_relayout_groups_per_edge``
+        cheapest destination views of one (source, consumer) edge.
+
+        Every consumer division with a distinct read partition is its own
+        relayout group, and every group becomes a copy buffer the solver must
+        place, though the consumer will read through at most one of them. A
+        group is ranked by its cheapest candidate (the best source division
+        that lands on it), ties toward the consumer division using more cores,
+        the solver's own preference. Dropping a group only removes an option:
+        a consumer division without a copy is treated exactly like an unpriced
+        pair (match for free or spill), and every fired relayout is still
+        certified at materialization.
+        """
+        cap = config.lx_solver_relayout_groups_per_edge
+        if cap <= 0 or not candidates:
+            return candidates
+        by_group: dict[int, list[RelayoutCandidate]] = {}
+        for candidate in candidates:
+            by_group.setdefault(candidate.group, []).append(candidate)
+        if len(by_group) <= cap:
+            return candidates
+
+        def rank(item: tuple[int, list[RelayoutCandidate]]) -> tuple:
+            group, members = item
+            best = min(c.cost_ns for c in members)
+            cores = max(consumer_divs[c.consumer_division].cores_used for c in members)
+            return (best, -cores, group)
+
+        kept = {group for group, _ in sorted(by_group.items(), key=rank)[:cap]}
+        logger.debug(
+            "[lx solver relayout] %s -> %s: keeping %d of %d destination views",
+            parent,
+            consumer,
+            len(kept),
+            len(by_group),
+        )
+        return [c for c in candidates if c.group in kept]
+
     def _cd_parent_relayouts(
         self,
         graph: GraphLowering,
@@ -3117,6 +3162,9 @@ class CoOptimizingAllocator(ScratchpadAllocator):
                             destination_footprint_bytes=destination_span,
                         )
                     )
+            candidates = self._cap_relayout_groups(
+                parent, consumer_op.get_name(), candidates, consumer_divs
+            )
             if candidates:
                 relayouts[parent] = candidates
                 logger.debug(
