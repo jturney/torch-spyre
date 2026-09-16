@@ -535,10 +535,27 @@ class _LazyMax(sympy.Max):
         return super().__new__(cls, *args, **kwargs)
 
 
+_LAZY = {sympy.Min: _LazyMin, sympy.Max: _LazyMax}
+
+
 def _lazy_minmax(expr: sympy.Expr) -> sympy.Expr:
-    """Rebuild every ``Min``/``Max`` node of ``expr`` as its lazy counterpart."""
-    expr = expr.replace(lambda e: type(e) is sympy.Min, lambda e: _LazyMin(*e.args))
-    return expr.replace(lambda e: type(e) is sympy.Max, lambda e: _LazyMax(*e.args))
+    """Rebuild every ``Min``/``Max`` node of ``expr`` as its lazy counterpart.
+
+    A hand-rolled bottom-up rebuild rather than ``Basic.replace``: ``replace``
+    reconstructs a node whose children changed with its ORIGINAL class before
+    applying the substitution, so a ``Min`` nested inside a ``Max`` was
+    canonicalized once more on the way up (13 s on the 304-op graph's
+    objective). Here a ``Min``/``Max`` is built lazy in the first place and
+    every other node is rebuilt only when a child actually changed."""
+    if not expr.args:
+        return expr
+    args = [_lazy_minmax(a) for a in expr.args]
+    lazy = _LAZY.get(type(expr))
+    if lazy is not None:
+        return lazy(*args)
+    if all(a is b for a, b in zip(args, expr.args)):
+        return expr
+    return expr.func(*args)
 
 
 class _SympyExprToCpSat(Printer):
