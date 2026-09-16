@@ -908,6 +908,38 @@ class _SympyExprToCpSat(Printer):
             raise NotImplementedError(f"no division variable for {symbols[0]}")
         return wrapper.division_is(int(constants[0]))
 
+    def _print_RelayoutCharge(self, expr):
+        """``RelayoutCharge(is_lx, division_X, price_0, ...)`` (a relayout
+        copy's ``cost_term``) -> one ``element`` lookup of X's division into the
+        price table plus a charge variable equal to that price while the copy
+        is resident and 0 otherwise: two constraints per copy, against one
+        boolean product per (copy, priced division) had the table been written
+        as a sum of deltas. Divisions past the table read 0; a source that is
+        not a division-choosing buffer of this solve prices at 0, as it can
+        never fire (``_constrain_relayout_copies``)."""
+        is_lx, division, *prices = expr.args
+        table = [int(p) for p in prices]
+        lit = self._print(is_lx)
+        if division.is_Integer:
+            i = int(division)
+            return lit * (table[i] if 0 <= i < len(table) else 0)
+        wrapper = self._sym_map.get(f"_division_of_{division.name}")
+        if wrapper is None or not isinstance(wrapper, _CoreDivisionBufferWithCpVars):
+            return 0
+        table += [0] * (len(wrapper.buffer.core_divisions) - len(table))
+        table = table[: len(wrapper.buffer.core_divisions)]
+        top = max(table, default=0)
+        if top <= 0:
+            return 0
+        name = is_lx.name if is_lx.is_Symbol else str(self._count)
+        self._count += 1
+        price = self._model.new_int_var(0, top, f"relayout_price_{name}")
+        self._model.add_element(wrapper.division, table, price)
+        charge = self._model.new_int_var(0, top, f"relayout_charge_{name}")
+        self._model.add(charge == price).only_enforce_if(lit)
+        self._model.add(charge == 0).only_enforce_if(lit.Not())
+        return charge
+
     def _print_Pow(self, expr):
         if expr.exp == 2:
             base = self._print(expr.base)
@@ -1166,7 +1198,6 @@ class CpSatLayoutSolver(CoreDivisionLayoutSolver):
         solver: "cp_model.CpSolver",
         tensors: dict[str, _LifetimeBufferWithCpVars],
         cost_expr: sympy.Expr,
-        copies: Optional[dict[tuple[str, int], "_CoreDivisionBufferWithCpVars"]] = None,
     ) -> Optional["cp_model.CpSolverStatus"]:
         sym_map = {}
         buffer_map = {}
@@ -1193,9 +1224,6 @@ class CpSatLayoutSolver(CoreDivisionLayoutSolver):
 
         try:
             cp_cost = _SympyExprToCpSat(model, sym_map, buffer_map).convert(cost_expr)
-            charges = self._relayout_copy_charges(model, tensors, copies or {})
-            if charges:
-                cp_cost = cp_cost + sum(charges)
             if not isinstance(cp_cost, (int, float)):
                 # if the cost is non-constant, we minimize it
                 # if the cost is constant, we use any solution
@@ -1209,46 +1237,6 @@ class CpSatLayoutSolver(CoreDivisionLayoutSolver):
             if not config._cpsat_warn_on_cost_expr:
                 raise
             return None
-
-    @staticmethod
-    def _relayout_copy_charges(
-        model: "cp_model.CpModel",
-        tensors: dict[str, _LifetimeBufferWithCpVars],
-        copies: dict[tuple[str, int], "_CoreDivisionBufferWithCpVars"],
-    ) -> list:
-        """The relayout price of every copy as native CP-SAT terms, the engine's
-        share of the objective (``cost_expr`` carries no copy price, see
-        ``plan_layout_and_core_divisions``).
-
-        Per copy: one ``element`` lookup of the source's division into the
-        group's price table (unpriced divisions read 0; ``_constrain_relayout_
-        copies`` already forbids them while the copy is resident) and one
-        charge variable equal to that price while the copy is resident and 0
-        otherwise. Two constraints per copy instead of one boolean product per
-        (copy, source division), and no term in the sympy expression at all.
-        Prices are in nanoseconds, rounded to integers, the objective's unit.
-        """
-        charges = []
-        for group_key, copy_w in sorted(copies.items()):
-            source = tensors.get(copy_w.buffer.relayout_parent)
-            if source is None or not isinstance(source, _CoreDivisionBufferWithCpVars):
-                continue
-            prices = copy_w.buffer.cost_by_source_division
-            table = [
-                int(round(prices.get(i, 0.0)))
-                for i in range(len(source.buffer.core_divisions))
-            ]
-            top = max(table, default=0)
-            if top <= 0:
-                continue
-            name = copy_w.buffer.name
-            price = model.new_int_var(0, top, f"relayout_price_{name}")
-            model.add_element(source.division, table, price)
-            charge = model.new_int_var(0, top, f"relayout_charge_{name}")
-            model.add(charge == price).only_enforce_if(copy_w.in_buffer)
-            model.add(charge == 0).only_enforce_if(copy_w.in_buffer.Not())
-            charges.append(charge)
-        return charges
 
     def _run(
         self,
@@ -1300,7 +1288,7 @@ class CpSatLayoutSolver(CoreDivisionLayoutSolver):
         occupancy: Optional[int] = None
 
         if cost_expr is not None:
-            status = self._minimize_cost_expr(model, solver, tensors, cost_expr, copies)
+            status = self._minimize_cost_expr(model, solver, tensors, cost_expr)
 
         if status is None:
             # TODO: Update objective to a maxmin optimization to optimize overall
