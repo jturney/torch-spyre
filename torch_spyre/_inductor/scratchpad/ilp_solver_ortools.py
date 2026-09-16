@@ -332,11 +332,35 @@ class _CoreDivisionBufferWithCpVars(_LifetimeBufferWithCpVars[CoreDivisionBuffer
         core_cost = [
             sum(split**2 for split in cd.splits.values()) for cd in b.core_divisions
         ]
+        # For a relayout copy only: the served literals of the consumer edges
+        # it can carry, filled by the sources' constrain_residency and consumed
+        # by _constrain_relayout_copies ("a resident copy serves someone").
+        self.serves: list[Any] = []
+        self.cores_used = cores_used
+        if len(b.core_divisions) == 1:
+            # Nothing to choose: bind every division-derived quantity as a
+            # constant instead of an element lookup on a fixed index. Every
+            # relayout copy is such a buffer, and with hundreds of them the
+            # free eff_size/cores/core_cost/split integers (domains up to a few
+            # thousand) behind one-entry elements made CP-SAT's presolve scale
+            # super-linearly in the copy count: 40 s at 160 copies, past the
+            # 120 s limit at 312, on the 304-op spyre_attn decode graph.
+            self.division = m.new_constant(0)
+            self.eff_size = per_core[0]
+            self.core_cost = core_cost[0]
+            self.cores = cores_used[0]
+            only = b.core_divisions[0]
+            self.cp_core_divs = {
+                key: only.splits.get(key, 1) for key in b.sym_core_divs
+            }
+            self.cp_core_divs_raw = {key: [v] for key, v in self.cp_core_divs.items()}
+            true, false = m.new_constant(1), m.new_constant(0)
+            self.division_is = lambda i: true if i == 0 else false
+            return
         self.division = m.new_int_var(0, len(b.core_divisions) - 1, f"div_{b.name}")
         self.eff_size = m.new_int_var(0, max(per_core), f"eff_size_{b.name}")
         self.core_cost = m.new_int_var(0, max(core_cost), f"core_cost_{b.name}")
         self.cores = m.new_int_var(min(cores_used), max(cores_used), f"occ_{b.name}")
-        self.cores_used = cores_used
 
         cp_core_divs: dict = {}
         cp_core_divs_raw: dict = {}
@@ -357,10 +381,6 @@ class _CoreDivisionBufferWithCpVars(_LifetimeBufferWithCpVars[CoreDivisionBuffer
         m.add_element(self.division, cores_used, self.cores)
         m.add_element(self.division, core_cost, self.core_cost)
 
-        # For a relayout copy only: the served literals of the consumer edges
-        # it can carry, filled by the sources' constrain_residency and consumed
-        # by _constrain_relayout_copies ("a resident copy serves someone").
-        self.serves: list[Any] = []
         self.division_is = cache(self._division_is)
 
     def _division_is(self, i: int) -> Any:
