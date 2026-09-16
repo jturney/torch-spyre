@@ -512,6 +512,35 @@ def get_cpu_count() -> int:
     return os.cpu_count() or 1
 
 
+class _LazyMin(sympy.Min):
+    """``Min`` built without canonicalization. An evaluated ``Min``/``Max`` runs
+    sympy's pairwise dominance check on its arguments (``_find_localzeros``),
+    which for the split-symbol expressions of the cost objective goes through
+    the assumptions system (``is_ge`` -> ``_monotonic_sign`` -> ``factor_terms``);
+    every rewrite pass below rebuilds these nodes, so on the 304-op spyre_attn
+    decode graph that check was ~60% of the planner's Python time (59.6 s of
+    the rewrite passes; 2.0 s with these classes). The printer lowers a
+    ``Min``/``Max`` structurally and never needs the canonical form."""
+
+    def __new__(cls, *args, **kwargs):
+        kwargs["evaluate"] = False
+        return super().__new__(cls, *args, **kwargs)
+
+
+class _LazyMax(sympy.Max):
+    """``Max`` counterpart of :class:`_LazyMin`."""
+
+    def __new__(cls, *args, **kwargs):
+        kwargs["evaluate"] = False
+        return super().__new__(cls, *args, **kwargs)
+
+
+def _lazy_minmax(expr: sympy.Expr) -> sympy.Expr:
+    """Rebuild every ``Min``/``Max`` node of ``expr`` as its lazy counterpart."""
+    expr = expr.replace(lambda e: type(e) is sympy.Min, lambda e: _LazyMin(*e.args))
+    return expr.replace(lambda e: type(e) is sympy.Max, lambda e: _LazyMax(*e.args))
+
+
 class _SympyExprToCpSat(Printer):
     """Translates a sympy cost expression into an OR-Tools CP-SAT expression
     over an existing ``sympy symbol -> CP-SAT var`` mapping.
@@ -533,6 +562,17 @@ class _SympyExprToCpSat(Printer):
         """Return the CP-SAT expression equivalent to ``cost_expr`` under
         ``sym_map`` (``sympy symbol -> CP-SAT var``)."""
         logger.debug("[CP-SAT layout solver] cost expr (raw): %s", cost_expr)
+        cost_expr = self._rewrite(cost_expr)
+        logger.debug("[CP-SAT layout solver] cost expr (linearized): %s", cost_expr)
+        return self._print(cost_expr)
+
+    def _rewrite(self, cost_expr: sympy.Expr) -> sympy.Expr:
+        """The symbolic rewrites that bring ``cost_expr`` into the form the
+        printer lowers: floors dropped, logs of Min/Max pushed inside, split
+        logs and inverses replaced by table symbols, scalars pushed into
+        Min/Max/Piecewise, floats truncated. Min/Max are rebuilt lazily first
+        (see :class:`_LazyMin`)."""
+        cost_expr = _lazy_minmax(cost_expr)
         cost_expr = cost_expr.replace(
             lambda e: e.func == sympy.floor,
             lambda e: e.args[0],
@@ -552,11 +592,10 @@ class _SympyExprToCpSat(Printer):
             lambda e: self._min_piecewise_expand(e),
         )
         cost_expr = cost_expr.replace(
-            lambda e: e.func in [sympy.Min, sympy.Max, sympy.Piecewise],
+            lambda e: isinstance(e, (sympy.Min, sympy.Max, sympy.Piecewise)),
             lambda e: self._truncate_floats_min(e),
         )
-        logger.debug("[CP-SAT layout solver] cost expr (linearized): %s", cost_expr)
-        return self._print(cost_expr)
+        return cost_expr
 
     @classmethod
     def _log_min(cls, expr):
@@ -946,6 +985,8 @@ class _SympyExprToCpSat(Printer):
     def _print_Max(self, expr):
         # max range is (max(mins), max(maxes))
         args = [self._print(arg) for arg in expr.args]
+        if all(isinstance(a, (int, float)) for a in args):
+            return max(args)  # a lazy Max of constants was never folded
         bounds = map(max, zip(*[self._affine_bounds(arg) for arg in args]))
         max_var = self._model.new_int_var(*bounds, f"max_var_{self._count}")
         self._model.AddMaxEquality(max_var, args)
@@ -955,6 +996,8 @@ class _SympyExprToCpSat(Printer):
     def _print_Min(self, expr):
         # min range is (min(mins), min(maxes))
         args = [self._print(arg) for arg in expr.args]
+        if all(isinstance(a, (int, float)) for a in args):
+            return min(args)  # a lazy Min of constants was never folded
         bounds = map(min, zip(*[self._affine_bounds(arg) for arg in args]))
         min_var = self._model.new_int_var(*bounds, f"min_var_{self._count}")
         self._model.AddMinEquality(min_var, args)
