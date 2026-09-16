@@ -2034,6 +2034,7 @@ class CoOptimizingAllocator(ScratchpadAllocator):
         # way select_allocator probes joint-ness, because the factory may be a
         # function rather than a class. Engines that cannot are never handed a
         # copy, and their objective never carries a relayout term.
+        self._relayout_pair_costs: dict[tuple, Optional[float]] = {}
         self._decides_lx_relayouts: bool = bool(
             getattr(layout_planning([], size), "decides_lx_relayouts", False)
         )
@@ -3088,7 +3089,11 @@ class CoOptimizingAllocator(ScratchpadAllocator):
                         spans[view] = None
                 return spans[view]
 
-            pair_cost: dict[tuple, Optional[float]] = {}
+            # Graph-wide cache: the same (source view, destination view, cores,
+            # tensor geometry) recurs across structurally identical ops (the
+            # unrolled KV blocks of attention), and pricing it re-runs the movement
+            # gate's per-core owner comparison each time.
+            pair_cost = self._relayout_pair_costs
             candidates: list[RelayoutCandidate] = []
             # Destination views are interned per parent across every consumer
             # of this solve: two consumers whose candidates land on the same
@@ -3131,7 +3136,15 @@ class CoOptimizingAllocator(ScratchpadAllocator):
                         is not None
                     ):
                         continue
-                    key = (pv, cv, ncores, dst_cores)
+                    key = (
+                        pv,
+                        cv,
+                        ncores,
+                        dst_cores,
+                        tuple(device_dims),
+                        out_elems,
+                        dtype_bytes,
+                    )
                     if key not in pair_cost:
                         pair_cost[key] = solver_relayout_pair_cost(
                             pv,
