@@ -483,6 +483,7 @@ _inv_rel_op = {
 }
 
 
+@cache
 def get_cpu_count() -> int:
     """CPUs this process may actually use, after spyre-inference's
     ``threading_config.get_cpu_count``. Resolution order: ``SPYRE_NUM_CPUS``,
@@ -496,7 +497,8 @@ def get_cpu_count() -> int:
     if env.strip().isdigit() and int(env) > 0:
         return int(env)
     try:
-        quota, period = open("/sys/fs/cgroup/cpu.max").read().split()
+        with open("/sys/fs/cgroup/cpu.max") as f:
+            quota, period = f.read().split()
         if quota != "max":
             return max(1, int(quota) // int(period))
     except (OSError, ValueError):
