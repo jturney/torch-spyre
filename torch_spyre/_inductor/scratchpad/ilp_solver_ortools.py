@@ -1178,6 +1178,26 @@ class CpSatLayoutSolver(CoreDivisionLayoutSolver):
         solver = cp_model.CpSolver()
         if self._time_limit_seconds:
             solver.parameters.max_time_in_seconds = float(self._time_limit_seconds)
+        # Relayout copies whose source is in the solve are free to become
+        # resident; CP-SAT's presolve scales super-linearly in their number
+        # (see config.lx_solver_relayout_presolve_max_copies), so past the
+        # threshold search runs on the raw model instead.
+        free_copies = sum(
+            isinstance(
+                tensors.get(copy_w.buffer.relayout_parent),
+                _CoreDivisionBufferWithCpVars,
+            )
+            for copy_w in copies.values()
+        )
+        max_copies = config.lx_solver_relayout_presolve_max_copies
+        if max_copies > 0 and free_copies > max_copies:
+            solver.parameters.cp_model_presolve = False
+            logger.info(
+                "[CP-SAT layout solver] %d relayout copies exceed the presolve "
+                "threshold of %d; solving without presolve",
+                free_copies,
+                max_copies,
+            )
         solver.parameters.num_search_workers = (
             1 if torch.are_deterministic_algorithms_enabled() else (os.cpu_count() or 1)
         )

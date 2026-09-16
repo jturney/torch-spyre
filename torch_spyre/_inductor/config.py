@@ -104,6 +104,16 @@ lx_solver_relayout_groups_per_edge: int = int(
     os.getenv("SPYRE_LX_SOLVER_RELAYOUT_GROUPS_PER_EDGE", "4")
 )
 
+# Above this many relayout copies in one CP-SAT solve, run the solver without
+# its presolve. One of CP-SAT's presolve passes scales super-linearly in the
+# number of free copy residency literals (measured on the spyre_attn decode
+# graph: 16 copies 5 s, 64 copies 13 s, 160 copies 40 s, 312 copies past the
+# 120 s limit) and no exposed parameter shortens it, while search on the raw
+# model finds a feasible plan within seconds. 0 never skips presolve.
+lx_solver_relayout_presolve_max_copies: int = int(
+    os.getenv("SPYRE_LX_SOLVER_RELAYOUT_PRESOLVE_MAX_COPIES", "64")
+)
+
 # Submit independent DXP kernel compilations to Inductor's subprocess pool and
 # resolve them together at the generated wrapper's async_compile.wait() barrier.
 # This is opt-in while the parallel path is evaluated on full model compiles.
