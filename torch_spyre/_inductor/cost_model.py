@@ -2132,16 +2132,38 @@ def charge_boundary_reads_once(bundles: list) -> list:
     return out
 
 
+def predict_bundles(
+    operations: Sequence,
+    features_by_buffer: Mapping[str, OpFeatures],
+    params: CostParams | None = None,
+) -> list[tuple[list[str], float]]:
+    """The terms :func:`predict_by_bundle` sums: one ``(buffer names, latency)``
+    per estimated bundle, in schedule order; the names are the buffers the
+    bundle's ops store (the ``features_by_buffer`` keys). The latency is a number for
+    concrete features and a sympy expression over the solver's residency and
+    split symbols for the co-optimizing allocator's symbolic features; the
+    cost-expression dump (``SPYRE_DUMP_COST_EXPR_FILE``) records these terms."""
+    bundles = charge_boundary_reads_once(
+        group_features_by_bundle(operations, features_by_buffer)
+    )
+    # Name each op by the buffer it was looked up under (``features_by_buffer``
+    # key), falling back to its own display name.
+    buffer_of = {id(feat): name for name, feat in features_by_buffer.items()}
+    return [
+        ([buffer_of.get(id(o), o.name) for o in bundle], predict_ops(bundle, params))
+        for bundle in bundles
+    ]
+
+
 def predict_by_bundle(
     operations: Sequence,
     features_by_buffer: Mapping[str, OpFeatures],
     params: CostParams | None = None,
 ) -> float:
     """Predicted latency (ns) for ``operations``, scored one bundle at a time."""
-    bundles = charge_boundary_reads_once(
-        group_features_by_bundle(operations, features_by_buffer)
+    return sum(
+        term for _, term in predict_bundles(operations, features_by_buffer, params)
     )
-    return sum(predict_ops(bundle, params) for bundle in bundles)
 
 
 def explain(ops: list, params: CostParams | None = None) -> str:

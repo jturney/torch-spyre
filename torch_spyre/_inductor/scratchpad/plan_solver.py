@@ -420,6 +420,84 @@ class RelayoutCharge(sympy.Function):
         return is_lx * (prices[i] if 0 <= i < len(prices) else 0)
 
 
+def solved_bindings(buffers: Sequence["LifetimeBoundBuffer"]) -> dict:
+    """The objective's symbols as the solved plan fixes them: ``is_lx`` is 1
+    for a placed buffer and 0 for a spilled one; a core-division buffer with a
+    chosen division binds its ``division`` index and each per-axis split
+    symbol to that division's split (1 for an axis it does not split). The
+    same reading the annealer applies to a candidate plan."""
+    bindings: dict = {}
+    for buf in buffers:
+        bindings[buf.sym_is_lx] = 1 if buf.address is not None else 0
+        chosen = getattr(buf, "chosen_division", None)
+        divisions = getattr(buf, "core_divisions", None)
+        if chosen is None or not divisions or not 0 <= chosen < len(divisions):
+            continue
+        bindings[buf.sym_division] = chosen
+        splits = divisions[chosen].splits
+        for key, sym in buf.sym_core_divs.items():
+            bindings[sym] = splits.get(key, 1)
+    return bindings
+
+
+def _evaluate(expr: sympy.Expr, bindings: dict) -> float | None:
+    try:
+        return float(sympy.sympify(expr).xreplace(bindings).evalf())
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def cost_expr_record(
+    cost_expr: sympy.Expr,
+    bundle_terms: Sequence[tuple[list[str], sympy.Expr]],
+    buffers: Sequence["LifetimeBoundBuffer"],
+    params: object = None,
+) -> dict:
+    """One dump record for a solved co-optimized graph: the objective's
+    per-bundle terms and relayout charges as ``sympy.srepr`` strings (lossless,
+    ``parse_expr`` restores them), the solved symbol bindings, and every term
+    evaluated under them. ``buffers`` are the solver's returned buffers;
+    ``buffers`` names (the graph's stores) are what a reader joins on."""
+    import dataclasses
+
+    bindings = solved_bindings(buffers)
+    copies = [b for b in buffers if isinstance(b, RelayoutCopyBuffer)]
+    record = {
+        "buffers": [b.name for b in buffers if not isinstance(b, RelayoutCopyBuffer)],
+        # Buffer sizes in bytes: with the names, a key that tells kernels apart
+        # even though every kernel numbers its buffers from buf0.
+        "buffer_sizes": {
+            b.name: b.size for b in buffers if not isinstance(b, RelayoutCopyBuffer)
+        },
+        "params": dataclasses.asdict(params)
+        if params is not None
+        and dataclasses.is_dataclass(params)
+        and not isinstance(params, type)
+        else {},
+        "bundles": [
+            {
+                "ops": list(names),
+                "expr": sympy.srepr(sympy.sympify(term)),
+                "value_ns": _evaluate(term, bindings),
+            }
+            for names, term in bundle_terms
+        ],
+        "relayout_terms": [
+            {
+                "copy": copy.name,
+                "source": copy.relayout_parent,
+                "expr": sympy.srepr(copy.cost_term()),
+                "value_ns": _evaluate(copy.cost_term(), bindings),
+                "resident": copy.address is not None,
+            }
+            for copy in copies
+        ],
+        "bindings": {str(k): v for k, v in bindings.items()},
+        "objective_ns": _evaluate(cost_expr, bindings),
+    }
+    return record
+
+
 RELAYOUT_COPY_PREFIX = "__spyre_lx_relayout__:copy:"
 
 

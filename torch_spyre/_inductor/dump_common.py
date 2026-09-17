@@ -36,6 +36,19 @@ def emit(text: str) -> None:
         sys.stderr.flush()
 
 
+def emit_json_line(path: str, record: dict) -> None:
+    """Append ``record`` as one JSON line to ``path`` (JSON Lines, one record per
+    dump). Instrumentation only: never raises."""
+    import json
+
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, separators=(",", ":"), default=str))
+            f.write("\n")
+    except OSError:
+        pass
+
+
 def banner(title: str) -> str:
     """Return a boxed section header for a dump record."""
     bar = "=" * 78
