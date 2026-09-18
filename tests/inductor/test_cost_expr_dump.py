@@ -116,3 +116,26 @@ def test_emit_json_line_appends_one_record_per_call(tmp_path):
     emit_json_line(str(path), {"b": sympy.Integer(2)})
     lines = path.read_text().splitlines()
     assert [json.loads(line) for line in lines] == [{"a": 1}, {"b": "2"}]
+
+
+def test_record_carries_the_divisions_the_choice_was_made_over():
+    p, c = _buffers()
+    # The gate admits only P's axis-1 split as a per-core match for C.
+    c.cd_parent_matches = {"P": [(0, 0)]}
+    (copy,) = CoOptimizingAllocator._relayout_copy_buffers([p, c])
+    p.address, p.chosen_division = 0, 1
+    c.address, c.chosen_division = 16, 0
+    copy.address = 32
+    rec = cost_expr_record(sympy.Integer(0), [], [p, c, copy], CostParams())
+    divs = rec["divisions"]
+    # Relayout copies carry a single division each and are left out.
+    assert list(divs) == ["P", "C"]
+    assert divs["P"]["cores"] == [4, 4] and divs["P"]["chosen"] == 1
+    assert divs["P"]["labels"] == ["s1/4", "s0/4"]
+    # P's chosen division (1, splitting axis 0) is not one the gate admits,
+    # so the record shows the residency C lost and the alternative it had.
+    assert divs["C"]["matches"] == {"P": [[0, 0]]}
+    assert divs["C"]["chosen"] == 0
+    # ``parents`` separates "the gate weighed this edge and admitted nothing"
+    # from "no edge was built at all", which have the same empty ``matches``.
+    assert divs["C"]["parents"] == ["P"] and divs["P"]["parents"] == []

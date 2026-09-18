@@ -457,7 +457,12 @@ def cost_expr_record(
     per-bundle terms and relayout charges as ``sympy.srepr`` strings (lossless,
     ``parse_expr`` restores them), the solved symbol bindings, and every term
     evaluated under them. ``buffers`` are the solver's returned buffers;
-    ``buffers`` names (the graph's stores) are what a reader joins on."""
+    ``buffers`` names (the graph's stores) are what a reader joins on.
+
+    ``divisions`` carries each buffer's candidate core counts, the one chosen,
+    its producers, and the division pairs the residency gate admitted on each
+    incoming edge -- the alternatives a decision was made over, which the
+    objective alone cannot show."""
     import dataclasses
 
     bindings = solved_bindings(buffers)
@@ -492,6 +497,35 @@ def cost_expr_record(
             }
             for copy in copies
         ],
+        # Reading why a division was chosen needs the alternatives it was
+        # chosen over: per buffer the core count and split shape of every
+        # candidate, the index the solver took, and the ``(parent, consumer)``
+        # index pairs the residency gate admitted on each incoming edge. Pairs
+        # are stored as INDICES into the two buffers' ``cores`` lists, so a
+        # reader can render them as core counts without the record repeating
+        # the divisions. Keyed by the CONSUMER, which is where ``parents`` and
+        # ``cd_parent_matches`` are populated. A parent with an EMPTY pair list
+        # divides no way this buffer can read locally; a parent absent from
+        # ``matches`` altogether was refused an edge outright, which is the
+        # louder of the two signals (issue #4655 was of that kind). Relayout copies are excluded, as
+        # they are from ``buffers``: a large graph has thousands of them and
+        # each carries a single division.
+        "divisions": {
+            b.name: {
+                "cores": [cd.cores_used for cd in b.core_divisions],
+                "labels": [cd.label for cd in b.core_divisions],
+                "chosen": b.chosen_division,
+                "parents": list(b.parents),
+                "matches": {
+                    parent: [list(pair) for pair in pairs]
+                    for parent, pairs in (b.cd_parent_matches or {}).items()
+                },
+            }
+            for b in buffers
+            if isinstance(b, CoreDivisionBuffer)
+            and not isinstance(b, RelayoutCopyBuffer)
+            and b.core_divisions
+        },
         "bindings": {str(k): v for k, v in bindings.items()},
         "objective_ns": _evaluate(cost_expr, bindings),
     }
