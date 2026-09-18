@@ -121,6 +121,7 @@ else:
     except ImportError:  # pragma: no cover - exercised only when ortools is absent
         cp_model = None
 
+from torch_spyre._inductor.cost_model import BwCoresPenalty, CostParams
 from torch_spyre._inductor.scratchpad.lx_relayout import ChosenRelayout
 from torch_spyre._inductor.scratchpad.plan_solver import (
     CoreDivisionBuffer,
@@ -148,6 +149,8 @@ _SOLVER_CHOSE_SPILL = "spilled by solver (no residency benefit / no room)"
 # LifetimeBoundBuffer; the joint subclass binds this to CoreDivisionBuffer.
 _BufT = TypeVar("_BufT", bound=LifetimeBoundBuffer)
 
+# Only ``CostParams.red_bw_cores_g`` is read from this, which no caller overrides.
+_BW_CORES_PARAMS = CostParams()
 # constant to scale log of core split. error ~0.5%
 _CORE_LOG_SCALE = 32.0
 # constant to scale inverse of core split. error ~1%
@@ -892,6 +895,53 @@ class _SympyExprToCpSat(Printer):
             )
         self._sym_map[expr.name] = cp_var
         return cp_var
+
+    def _print_BwCoresPenalty(self, expr):
+        """``BwCoresPenalty(bytes, is_lx, split_X_d0, ...)`` -> one ``element``
+        lookup of X's division into a table of nanosecond penalties, plus one
+        variable equal to that entry while X is NOT resident and 0 while it is.
+
+        The weight is a constant, so every table entry is a plain integer in
+        nanoseconds: no multiplication equality, and none of the wide-domain
+        product variables a symbolic ``bytes * derate`` would create. Two
+        constraints per op, the shape ``_print_RelayoutCharge`` uses.
+        """
+        weight, gate, *splits = expr.args
+        splits = [a for a in splits if a.is_Symbol]
+        if not splits or not weight.is_Number:
+            return 0
+        # split_<buffer>_<axis> -> the buffer whose division indexes the table.
+        buf = str(splits[0])[len("split_") :].rsplit("_", 1)[0]
+        wrapper = self._sym_map.get(f"_division_of_division_{buf}")
+        if wrapper is None or not isinstance(wrapper, _CoreDivisionBufferWithCpVars):
+            return 0
+        values = [
+            int(
+                round(
+                    BwCoresPenalty.penalty_ns(
+                        float(weight), cd.cores_used, _BW_CORES_PARAMS
+                    )
+                )
+            )
+            for cd in wrapper.buffer.core_divisions
+        ]
+        top = max(values, default=0)
+        if top <= 0:  # every candidate division is at full occupancy
+            return 0
+        name = f"bw_cores_penalty_{buf}"
+        if name in self._sym_map:
+            return self._sym_map[name]
+        priced = self._model.new_int_var(0, top, f"{name}_table")
+        self._model.add_element(wrapper.division, values, priced)
+        if gate.is_Number:
+            self._sym_map[name] = priced
+            return priced
+        lit = self._print(gate)
+        charge = self._model.new_int_var(0, top, name)
+        self._model.add(charge == priced).only_enforce_if(lit.Not())
+        self._model.add(charge == 0).only_enforce_if(lit)
+        self._sym_map[name] = charge
+        return charge
 
     def _print_KroneckerDelta(self, expr):
         """``KroneckerDelta(division_X, k)`` -> the reified literal

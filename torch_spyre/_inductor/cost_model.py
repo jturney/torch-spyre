@@ -1577,6 +1577,116 @@ def reduction_read_bw(rows, p):
     )
 
 
+class BwCoresPenalty(sympy.Function):
+    """Extra nanoseconds an op's HBM traffic costs because its core division
+    drives only part of the bus: ``bytes * (1/g(cores) - 1) / BW_PEAK``, charged
+    only while the op's own buffer is NOT resident.
+
+    ``BwCoresPenalty(bytes, is_lx, split_0, split_1, ...)``. ``bytes`` is a
+    CONSTANT (the op's traffic with nothing resident), so the whole penalty is a
+    per-division constant in nanoseconds: the CP-SAT printer builds that table
+    once and emits one ``element`` lookup plus one variable reified on the
+    residency literal (``_print_BwCoresPenalty``).
+
+    Deliberately NOT written as ``bytes * derate``: a symbolic byte count times a
+    table lookup is BILINEAR, and the printer lowers such a product with
+    ``AddMultiplicationEquality`` over interval-multiplied bounds. With bytes in
+    the millions that produces variables with ~1e10 domains, once per op -- the
+    same wide-``_product_``-domain shape that already makes CP-SAT's presolve
+    misbehave on these models. Keeping the weight constant keeps the table in
+    nanoseconds (tens of thousands) and needs no multiplication at all.
+
+    An ADDITIVE penalty over the unchanged ``(R+W)/BW_PEAK`` term, so with every
+    op at full occupancy (g=1) the prediction is byte-identical to before.
+    """
+
+    @classmethod
+    def eval(cls, weight, is_lx, *splits):
+        if all(a.is_Number for a in (weight, is_lx, *splits)):
+            cores = 1
+            for sp in splits:
+                cores *= int(sp)
+            return sympy.Float(
+                cls.penalty_ns(float(weight), cores, CostParams()) * (1 - float(is_lx))
+            )
+        return None
+
+    @staticmethod
+    def penalty_ns(weight: float, cores, p) -> float:
+        """The extra ns itself: 0 at full occupancy, weight*(1/g - 1)/BW below it."""
+        g = bw_cores_g(cores, p)
+        if g >= 1.0:
+            return 0.0
+        return weight * (1.0 / g - 1.0) / p.bw_peak_gbps
+
+    @staticmethod
+    def _imp_(weight, is_lx, *splits):
+        cores = 1
+        for sp in splits:
+            cores *= round(sp)
+        return BwCoresPenalty.penalty_ns(weight, cores, CostParams()) * (1 - is_lx)
+
+
+def _op_hbm_weight(o) -> int:
+    """The op's HBM bytes with nothing resident: the constant the cores penalty
+    is proportional to. 0 (no penalty) when any arg's size is symbolic."""
+    total = 0
+    for a in o.args:
+        rep_factor = a.replication if isinstance(a.replication, int) else 1
+        if not isinstance(a.elems, int) or not isinstance(a.loop_factor, (int, float)):
+            return 0
+        total += int(a.elems * a.loop_factor * rep_factor) * o.dtype_bytes
+    return total
+
+
+def _bw_cores_penalty(o, p):
+    """The op's :class:`BwCoresPenalty`, or 0.0 when it cannot apply: the feature
+    is off, the division is committed (the numeric path's predictions are the
+    calibrated ones), the op has no split symbols, or its size is symbolic."""
+    if not config.cost_model_bw_cores_derate:
+        return 0.0
+    cores = getattr(o, "cores", None)
+    if not isinstance(cores, sympy.Basic):
+        return 0.0
+    splits = sorted(
+        (sym for sym in cores.free_symbols if str(sym).startswith("split_")), key=str
+    )
+    weight = _op_hbm_weight(o)
+    if not splits or weight <= 0:
+        return 0.0
+    out = next((a for a in o.args if a.role == "output"), None)
+    gate = out.is_lx if out is not None and isinstance(out.is_lx, sympy.Basic) else 0
+    return BwCoresPenalty(weight, gate, *splits)
+
+
+def bw_cores_g(cores, p) -> float:
+    """g(cores) = BW(cores)/BW(32) in [0, 1]: the fraction of full-bus bandwidth a
+    memory-bound kernel realizes with ``cores`` active cores.
+
+    The anchor table (``CostParams.red_bw_cores_g``) was measured on the clean
+    plain reductions; the SHAPE it encodes -- sub-linear and saturating, one core
+    driving ~11% of the bus rather than 1/32 -- is a property of the memory system
+    and is applied to every memory-bound bundle here, not only to reductions.
+    That extrapolation is the part to re-measure. ``g(32) = 1.0`` exactly, so every
+    prediction on the cores=32 gold path is byte-identical to before.
+    """
+    g = p.red_bw_cores_g
+    if cores is None:
+        return 1.0
+    cores = int(cores)
+    if cores >= 32:
+        return 1.0
+    if cores <= 1:
+        return g[1]
+    ks = sorted(g)
+    lc = log2(cores)
+    for a, b in zip(ks, ks[1:]):
+        if a <= cores <= b:
+            t = (lc - log2(a)) / (log2(b) - log2(a))
+            return g[a] + t * (g[b] - g[a])
+    return 1.0
+
+
 def _reduction_bw_cores_factor(cores, p):
     """g(cores)=BW(cores)/BW(32): the fraction of full-bus reduction bandwidth realized
     with `cores` active cores. Piecewise-linear in log2(cores) over the measured anchor
@@ -1853,6 +1963,12 @@ def predict_ops(ops: list, params: CostParams | None = None) -> float:
         mem = (r + w) / p.bw_peak_gbps + p.rw_turnaround_ns_per_byte * _lazy_min(r, w)
     else:
         mem = (r + w) / p.bw_peak_gbps + p.rw_turnaround_ns_per_byte * _lazy_min(r, w)
+    # BANDWIDTH vs CORES. The branches above charge HBM bytes at a bus-wide rate,
+    # so a memory-bound op's core division does not appear in the prediction at
+    # all and the co-optimizing solver has no reason to use more than one core
+    # (issue #4655). One additive penalty per op, each a per-division constant in
+    # ns; zero at full occupancy, so nothing on the cores=32 path changes.
+    mem = mem + sum((_bw_cores_penalty(o, p) for o in ops), 0.0)
     mem = mem + rep_ns
     # NOTE: a multi-op dependent chain (e.g. add3/add4 = chained binary adds) runs
     # slower than its byte count because the intermediate is written then read back
