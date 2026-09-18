@@ -467,6 +467,25 @@ def cost_expr_record(
 
     bindings = solved_bindings(buffers)
     copies = [b for b in buffers if isinstance(b, RelayoutCopyBuffer)]
+    bundles = [
+        {
+            "ops": list(names),
+            "expr": sympy.srepr(sympy.sympify(term)),
+            "value_ns": _evaluate(term, bindings),
+        }
+        for names, term in bundle_terms
+    ]
+    relayout_terms = [
+        {
+            "copy": copy.name,
+            "source": copy.relayout_parent,
+            "expr": sympy.srepr(copy.cost_term()),
+            "value_ns": _evaluate(copy.cost_term(), bindings),
+            "resident": copy.address is not None,
+        }
+        for copy in copies
+    ]
+    objective_ns = _evaluate(cost_expr, bindings)
     record = {
         "buffers": [b.name for b in buffers if not isinstance(b, RelayoutCopyBuffer)],
         # Buffer sizes in bytes: with the names, a key that tells kernels apart
@@ -479,24 +498,8 @@ def cost_expr_record(
         and dataclasses.is_dataclass(params)
         and not isinstance(params, type)
         else {},
-        "bundles": [
-            {
-                "ops": list(names),
-                "expr": sympy.srepr(sympy.sympify(term)),
-                "value_ns": _evaluate(term, bindings),
-            }
-            for names, term in bundle_terms
-        ],
-        "relayout_terms": [
-            {
-                "copy": copy.name,
-                "source": copy.relayout_parent,
-                "expr": sympy.srepr(copy.cost_term()),
-                "value_ns": _evaluate(copy.cost_term(), bindings),
-                "resident": copy.address is not None,
-            }
-            for copy in copies
-        ],
+        "bundles": bundles,
+        "relayout_terms": relayout_terms,
         # Reading why a division was chosen needs the alternatives it was
         # chosen over: per buffer the core count and split shape of every
         # candidate, the index the solver took, and the ``(parent, consumer)``
@@ -527,8 +530,24 @@ def cost_expr_record(
             and b.core_divisions
         },
         "bindings": {str(k): v for k, v in bindings.items()},
-        "objective_ns": _evaluate(cost_expr, bindings),
+        "objective_ns": objective_ns,
     }
+    # A term that would not evaluate under the solved bindings reads in the JSON
+    # exactly like one deliberately left unpriced. The difference matters: the
+    # second is normal, the first means the objective and the bindings have
+    # drifted apart -- a cost-model change introducing a symbol no engine binds,
+    # say. Say so once, where the CP-SAT path already logs "cannot linearize".
+    unpriced = sum(
+        1 for entry in (*bundles, *relayout_terms) if entry["value_ns"] is None
+    )
+    if unpriced or objective_ns is None:
+        logger.warning(
+            "cost dump: %d of %d terms did not evaluate under the solved "
+            "bindings%s; objective and bindings may have drifted",
+            unpriced,
+            len(bundles) + len(relayout_terms),
+            "" if objective_ns is not None else " (whole objective too)",
+        )
     return record
 
 

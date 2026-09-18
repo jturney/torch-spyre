@@ -110,6 +110,50 @@ def test_record_evaluates_every_term_under_the_solved_plan():
     assert back.free_symbols == {copy.sym_is_lx, p.sym_division}
 
 
+def test_a_bundle_names_its_buffers_after_the_boundary_rewrite(monkeypatch):
+    """The dump's join key survives ``charge_boundary_reads_once``.
+
+    That pass rebuilds any op whose graph-input read an earlier bundle already
+    paid for (``dataclasses.replace``), which gives the copy a new ``id()``.
+    Naming the ops by identity against the caller's features then missed and
+    fell back to ``OpFeatures.name`` -- the op KIND ("sub"), not the buffer --
+    for exactly the shape the dump exists to explain: several bundles reading
+    one graph input. The prices were right; only the names a reader joins on
+    were not.
+
+    ``estimate_bundles`` is stubbed because the shape needs TWO bundles sharing
+    a graph input, and the real scheduler is what decides that.
+    """
+    from torch_spyre._inductor import fusion
+    from torch_spyre._inductor.cost_model import ArgTraffic, OpFeatures, predict_bundles
+
+    def reader(out, op_kind):
+        return OpFeatures(
+            name=op_kind,
+            is_reduction=False,
+            out_elems=64,
+            cores=32,
+            dtype_bytes=2,
+            args=[
+                ArgTraffic(out, "output", False, 64, is_boundary=False),
+                ArgTraffic("arg0_1", "input", False, 64, is_boundary=True),
+            ],
+        )
+
+    class _Op:
+        def __init__(self, name):
+            self.name = name
+
+    operations = [_Op("buf0"), _Op("buf1")]
+    features = {"buf0": reader("buf0", "amax"), "buf1": reader("buf1", "sub")}
+    monkeypatch.setattr(fusion, "estimate_bundles", lambda ops: [[o] for o in ops])
+
+    named = [names for names, _ in predict_bundles(operations, features)]
+    assert named == [["buf0"], ["buf1"]], (
+        "the second bundle's op was renamed to its op kind by the rewrite"
+    )
+
+
 def test_emit_json_line_appends_one_record_per_call(tmp_path):
     path = tmp_path / "dump.jsonl"
     emit_json_line(str(path), {"a": 1})
@@ -139,3 +183,32 @@ def test_record_carries_the_divisions_the_choice_was_made_over():
     # ``parents`` separates "the gate weighed this edge and admitted nothing"
     # from "no edge was built at all", which have the same empty ``matches``.
     assert divs["C"]["parents"] == ["P"] and divs["P"]["parents"] == []
+
+
+def test_a_parent_the_gate_refused_outright_is_still_listed():
+    """The louder of the two silences, and the one issue #4655 turned on.
+
+    ``build_residency_edge`` returning None drops the producer from
+    ``cd_parent_matches`` entirely -- not an empty pair list, no key at all --
+    so without ``parents`` the record cannot tell "this edge was weighed and
+    admitted nothing" from "this source was refused before any division pair
+    was considered". Only the second means a residency reason on the producer
+    kept it out of the running.
+    """
+    p, c = _buffers()
+    c.cd_parent_matches = {}  # the gate built no edge for P at all
+    (copy,) = CoOptimizingAllocator._relayout_copy_buffers([p, c])
+    p.address, p.chosen_division = 0, 1
+    c.address, c.chosen_division = 16, 0
+    copy.address = 32
+    divs = cost_expr_record(sympy.Integer(0), [], [p, c, copy], CostParams())[
+        "divisions"
+    ]
+    assert divs["C"]["parents"] == ["P"], "the edge exists in the graph"
+    assert "P" not in divs["C"]["matches"], "and the gate refused it outright"
+    # The weighed-but-empty case is the other one, and must stay distinguishable.
+    c.cd_parent_matches = {"P": []}
+    divs = cost_expr_record(sympy.Integer(0), [], [p, c, copy], CostParams())[
+        "divisions"
+    ]
+    assert divs["C"]["matches"] == {"P": []}

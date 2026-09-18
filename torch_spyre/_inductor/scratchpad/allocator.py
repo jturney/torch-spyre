@@ -2147,6 +2147,11 @@ class CoOptimizingAllocator(ScratchpadAllocator):
             )
             if not config._cpsat_warn_on_cost_expr:
                 raise
+            # Both the terms and the objective are the failed build's output, so
+            # neither is dumpable. ``cost_expr = None`` already skips the dump;
+            # clearing the terms too keeps that a local invariant rather than
+            # something a reader has to chase to the dump call below.
+            bundle_terms = []
             cost_expr = None
 
         # One price term per relayout copy (a source and one destination view,
