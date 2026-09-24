@@ -3196,6 +3196,8 @@ class CoOptimizingAllocator(ScratchpadAllocator):
                     bundle_terms,
                     result,
                     _COST_PARAMS,
+                    solver.off_expression_ns(),
+                    solver.score_ns(),
                     context=context,
                 ),
             )
