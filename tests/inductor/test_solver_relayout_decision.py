@@ -245,6 +245,25 @@ def test_cpu_count_detects_when_the_setting_is_unset(monkeypatch):
     assert config.get_cpu_count() == detected
 
 
+def test_num_cpus_stays_out_of_the_inductor_cache_key():
+    """The worker count describes the machine, not the graph: setting it must not
+    change the FX graph cache key, which ``save_config_portable`` of this config
+    module feeds (it is the backend's ``device_custom_config``). A setting that
+    does shape the compile still changes the key, so the config is still in it."""
+
+    def key():
+        return config.save_config_portable(
+            ignore_private_configs=False, readonly_values=True
+        )
+
+    base = key()
+    assert "num_cpus" not in base
+    with config.patch(num_cpus=3):
+        assert key() == base
+    with config.patch(cpsat_time_limit_seconds=config.cpsat_time_limit_seconds + 1):
+        assert key() != base
+
+
 def test_cpu_count_is_read_per_call(monkeypatch):
     """No cached count: a patched ``num_cpus`` takes effect on the next call."""
     monkeypatch.setattr(config, "num_cpus", 5)
