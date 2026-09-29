@@ -844,7 +844,8 @@ Environment Variables
        ``num_cpus``; ``config.patch(num_cpus=1)`` gives one worker). When
        unset, or not a positive integer, ``num_cpus`` is ``None`` and the
        count is derived from the cgroup v2 quota, then ``psutil``, then
-       ``os.cpu_count()``
+       ``os.cpu_count()``. Not part of the compile cache key, so a cached
+       compile is reused whatever the value
 
 **Device enumeration** (``torch_spyre/csrc/spyre_device_enum.cpp``):
 

@@ -382,4 +382,15 @@ _cpsat_warn_on_cost_expr: bool = True
 # torch._inductor.config.force_disable_caches = True.
 spyre_kernel_cache: bool = os.environ.get("SPYRE_KERNEL_CACHE", "0") == "1"
 
+# Settings left out of the Inductor FX graph cache key. This module is the Spyre
+# backend's ``device_custom_config``, so ``save_config_portable`` puts every
+# other setting's value in the key. A setting belongs here when it describes the
+# machine rather than the graph, as Inductor's own ``compile_threads`` does: a
+# cached compile is reused whatever its value is.
+_cache_config_ignore_prefix: list[str] = [
+    # The CP-SAT worker count: an explicit SPYRE_NUM_CPUS or patch would
+    # otherwise split the cache by machine for identical graphs.
+    "num_cpus",
+]
+
 install_config_module(sys.modules[__name__])
