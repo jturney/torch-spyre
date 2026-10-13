@@ -33,6 +33,7 @@ from torch_spyre._inductor.constants import (
 )
 from torch_spyre._inductor.errors import Unsupported
 from torch_spyre._inductor.pass_utils import (
+    compute_restickify_needed,
     device_coordinates,
     try_device_coordinates,
 )
