@@ -654,12 +654,12 @@ def lx_solver_relayout() -> bool:
     """Whether the configured layout solver decides LX relayouts.
 
     The committed collector decides them under ``greedy`` (#3439, #3440); the
-    co-optimizing CP-SAT solver decides them itself (#4203). Simulated annealing
-    does not yet (#4425). A function on the solver choice rather than a separate
-    option, so there is nothing to keep in sync and it can be deleted once every
-    solver supports relayouts.
+    co-optimizing CP-SAT solver (#4203) and the simulated-annealing one (#4425)
+    decide them themselves. A function on the solver choice rather than a
+    separate option, so there is nothing to keep in sync and it can be deleted
+    once every solver supports relayouts.
     """
-    return config.layout_solver in ("greedy", "cpsat")
+    return config.layout_solver in ("greedy", "cpsat", "simulated_annealing")
 
 
 def derive_completed_reduction_routes(
