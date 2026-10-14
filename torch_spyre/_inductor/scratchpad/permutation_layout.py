@@ -25,6 +25,7 @@ drive this substrate by composition; it knows nothing about how the
 permutation is chosen.
 """
 
+from collections.abc import Sequence
 from typing import Optional
 from abc import ABC, abstractmethod
 import bisect
@@ -321,6 +322,25 @@ class PermutationBasedLayoutSolverBase(ABC):
             return 0.0
         old_total = self.total_quality
         self._reflow_eligibility(idx, flag)
+        return self.total_quality - old_total
+
+    def update(
+        self,
+        resizes: Sequence[tuple[int, int]],
+        flags: Sequence[tuple[int, bool]],
+    ) -> float:
+        """:meth:`resize` each ``(idx, size)`` in ``resizes``, then
+        :meth:`set_eligible` each ``(idx, flag)`` in ``flags``. Returns the
+        change in :meth:`quality`.
+
+        The native packer re-places once for the whole batch rather than once
+        per call; this one reflows incrementally per call already, so it simply
+        makes them, and the resulting layout is the same either way."""
+        old_total = self.total_quality
+        for idx, size in resizes:
+            self.resize(idx, size)
+        for idx, flag in flags:
+            self.set_eligible(idx, flag)
         return self.total_quality - old_total
 
     def rotate(self, i: int, j: int) -> float:
