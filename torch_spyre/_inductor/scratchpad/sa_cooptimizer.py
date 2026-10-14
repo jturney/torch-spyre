@@ -49,7 +49,7 @@ import keyword
 import math
 import random as rnd
 import statistics
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence, Set as AbstractSet
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
 
@@ -1320,6 +1320,8 @@ class SaCoOptimizingSolver(CoreDivisionLayoutSolver):
             else self._spill_cost(b)
             for b in self._bufs
         ]
+        self._total_spill_cost = sum(self._spill_costs)
+        self._names = [b.name for b in self._bufs]
         self._hbm_bytes_per_us = utils.hbm_bytes_per_us()
 
     # -- division-dependent derivations --------------------------------------
@@ -1513,8 +1515,19 @@ class SaCoOptimizingSolver(CoreDivisionLayoutSolver):
         )
 
     def _resident_addresses(self) -> list[Optional[int]]:
-        """``packer.addresses`` with the relayout coupling the packer cannot see
-        enforced: the addresses of the buffers actually resident.
+        """``packer.addresses`` with every buffer :meth:`_resident_indices`
+        drops set to ``None``: the addresses the write-back commits."""
+        addresses = self.packer.addresses
+        if not self._relayout_on:
+            return addresses
+        resident = self._resident_indices()
+        return [
+            address if i in resident else None for i, address in enumerate(addresses)
+        ]
+
+    def _resident_indices(self) -> set[int]:
+        """The buffers actually resident: the ones the packer placed, with the
+        relayout coupling the packer cannot see enforced.
 
         Eligibility keeps the coupling over divisions, but under capacity
         pressure the packer can place one side and spill the other. So, only
@@ -1529,26 +1542,31 @@ class SaCoOptimizingSolver(CoreDivisionLayoutSolver):
         Only the copies switched on, and their sources, can be involved: a copy
         that is off is never eligible, hence never placed, and a placed source
         is eligible, so with none of its copies on every child matches it.
+
+        Hot path: the packer reports the placed buffers only
+        (``allocated_indices``), a few hundred against the thousands of
+        occupants a graph with relayout copies hands it.
         """
-        addresses = self.packer.addresses
+        placed = set(self.packer.allocated_indices())
         if not self._relayout_on:
-            return addresses
-        addresses = list(addresses)
+            return placed
+        dropped = []
         for source in sorted({self._relayout_source[c] for c in self._relayout_on}):
-            if addresses[source] is None:
+            if source not in placed:
                 continue
             parent = self.chosen[source]
             for consumer, relation in self._children[source]:
                 if relation.compatible(parent, self.chosen[consumer]):
                     continue
                 read = self._relayout_read(source, consumer)
-                if read is None or addresses[read[0]] is None:
-                    addresses[source] = None
+                if read is None or read[0] not in placed:
+                    dropped.append(source)
                     break
-        for copy_idx in self._relayout_on:
-            if addresses[self._relayout_source[copy_idx]] is None:
-                addresses[copy_idx] = None
-        return addresses
+        placed.difference_update(dropped)
+        placed.difference_update(
+            [c for c in self._relayout_on if self._relayout_source[c] not in placed]
+        )
+        return placed
 
     def _read_across_a_tiling_boundary(self, idx: int, parent: DivisionConfig) -> bool:
         """Whether buffer ``idx`` is read by a coarse-tiled consumer at an
@@ -1662,15 +1680,15 @@ class SaCoOptimizingSolver(CoreDivisionLayoutSolver):
         reads_served = buffer.read_count - (1 if buffer.first_use_is_read else 0)
         return (reads_served + (1 if is_intermediate else 0)) * max(0, buffer.size)
 
-    def _companion_bytes(self, addresses: Sequence[Optional[int]]) -> int:
+    def _companion_bytes(self, resident: AbstractSet[int]) -> int:
         """HBM bytes the apply's companion buffers move that the rest of the
         objective does not count, under the current state: the sum of
         :meth:`_companion_charges`.
         """
-        return sum(nbytes for _run, nbytes in self._companion_charges(addresses))
+        return sum(nbytes for _run, nbytes in self._companion_charges(resident))
 
     def _companion_charges(
-        self, addresses: Sequence[Optional[int]]
+        self, resident: AbstractSet[int]
     ) -> Iterator[tuple[tuple[int, int], int]]:
         """``(run, bytes)`` for each escaping buffer of a tiled run: the HBM bytes
         its companion moves that the rest of the objective does not count.
@@ -1745,9 +1763,9 @@ class SaCoOptimizingSolver(CoreDivisionLayoutSolver):
                 # scratch and allocates no full buffer at all.
                 continue
             size = max(0, buf.size)
-            copy_read = 0 if addresses[idx] is not None else size
+            copy_read = 0 if idx in resident else size
             copy_write = copy_read if is_graph_output else size
-            outside_reads = size * outside if addresses[idx] is not None else 0
+            outside_reads = size * outside if idx in resident else 0
             yield (lo, hi), copy_read + copy_write + outside_reads
 
     def _staged_reads(
@@ -1801,7 +1819,7 @@ class SaCoOptimizingSolver(CoreDivisionLayoutSolver):
             )
         )
 
-    def _read_copy_savings(self, addresses: Sequence[Optional[int]]) -> dict[int, int]:
+    def _read_copy_savings(self, resident: AbstractSet[int]) -> dict[int, int]:
         """HBM bytes the resident staged read copies save under the current
         state, by source index.
 
@@ -1818,7 +1836,7 @@ class SaCoOptimizingSolver(CoreDivisionLayoutSolver):
         for idx, buf in enumerate(self._bufs):
             if not isinstance(buf, CoarseTileReadCopyBuffer):
                 continue
-            if addresses[idx] is None:
+            if idx not in resident:
                 continue
             saved = max(0, buf.size) * max(0, self._staged_reads(idx) - 1)
             if saved:
@@ -1828,7 +1846,7 @@ class SaCoOptimizingSolver(CoreDivisionLayoutSolver):
 
     def _read_copy_credit(
         self,
-        addresses: Sequence[Optional[int]],
+        resident_idx: AbstractSet[int],
         resident: Optional[frozenset[str]],
         base: int,
     ) -> int:
@@ -1848,10 +1866,10 @@ class SaCoOptimizingSolver(CoreDivisionLayoutSolver):
         resident source has no HBM residency to price, so its copies earn
         nothing.
         """
-        by_source = self._read_copy_savings(addresses)
+        by_source = self._read_copy_savings(resident_idx)
         if not by_source:
             return 0
-        sources = [s for s in by_source if addresses[s] is None]
+        sources = [s for s in by_source if s not in resident_idx]
         if not sources:
             return 0
         savings = sum(by_source[s] for s in sources)
@@ -1866,23 +1884,23 @@ class SaCoOptimizingSolver(CoreDivisionLayoutSolver):
 
     def _off_expression_terms(
         self,
-        addresses: Sequence[Optional[int]],
+        resident_idx: AbstractSet[int],
         resident: Optional[frozenset[str]],
         base: int,
     ) -> tuple[int, int]:
         """:meth:`_score`'s terms outside ``cost_expr`` in its fixed-point units:
         ``(companions, credit)``, the first added and the second subtracted."""
         companions = utils.to_fixed_us(
-            self._companion_bytes(addresses) / self._hbm_bytes_per_us
+            self._companion_bytes(resident_idx) / self._hbm_bytes_per_us
         )
-        return companions, self._read_copy_credit(addresses, resident, base)
+        return companions, self._read_copy_credit(resident_idx, resident, base)
 
     def off_expression_ns(self) -> dict[str, float]:
         if not self._bufs:
             return {}
-        addresses = self._resident_addresses()
-        base, resident = self._objective(addresses)
-        companions, credit = self._off_expression_terms(addresses, resident, base)
+        resident_idx = self._resident_indices()
+        base, resident = self._objective(resident_idx)
+        companions, credit = self._off_expression_terms(resident_idx, resident, base)
         ns = 1000.0 / utils.US_FIXED_POINT_SCALE
         return {"companions": companions * ns, "read_copy_savings": -credit * ns}
 
@@ -1893,13 +1911,12 @@ class SaCoOptimizingSolver(CoreDivisionLayoutSolver):
 
     def _score(self) -> int:
         """The shared objective for the current state, in integer fixed-point
-        time units. A buffer with a resident address is LX-resident (its address
-        is ``None`` iff ineligible, spilled, or dropped by the relayout coupling;
-        see :meth:`_resident_addresses`).
+        time units, over the buffers :meth:`_resident_indices` reports resident
+        (the placed ones, less any the relayout coupling drops).
 
-        Hot path: reads ``packer.addresses`` **once**. The native packer
-        materializes a fresh list per ``addresses`` access, so a per-buffer read
-        inside the loop was quadratic; hoisting it is 8-31x faster on the captures.
+        Hot path: asks the packer once, for the placed buffers only. The native
+        packer materializes a fresh list per query, so a per-buffer read inside
+        the loop was quadratic; hoisting it is 8-31x faster on the captures.
 
         The memory-only fallback is *differential* -- ``spill_cost`` is the traffic
         a spill adds **over** residency -- so a resident buffer contributes zero
@@ -1909,27 +1926,23 @@ class SaCoOptimizingSolver(CoreDivisionLayoutSolver):
         Both add :meth:`_companion_bytes` and subtract
         :meth:`_read_copy_credit`, at the HBM rate.
         """
-        addresses = self._resident_addresses()
-        base, resident = self._objective(addresses)
-        companions, credit = self._off_expression_terms(addresses, resident, base)
+        resident_idx = self._resident_indices()
+        base, resident = self._objective(resident_idx)
+        companions, credit = self._off_expression_terms(resident_idx, resident, base)
         return base + companions - credit
 
     def _objective(
-        self, addresses: Sequence[Optional[int]]
+        self, resident_idx: AbstractSet[int]
     ) -> tuple[int, Optional[frozenset[str]]]:
         """:meth:`_score` before its off-expression terms, and the resident
         names it was evaluated at (``None`` for the memory-only objective)."""
         if self._score_fn is not None:
-            resident = frozenset(
-                b.name
-                for b, address in zip(self._bufs, addresses)
-                if address is not None
-            )
+            resident = frozenset(self._names[i] for i in resident_idx)
             return self._score_fn(self.chosen, resident), resident
-        traffic = sum(
-            cost
-            for cost, address in zip(self._spill_costs, addresses)
-            if address is None
+        # Spill costs are integers, so summing the resident ones off the total
+        # is exact whatever the order.
+        traffic = self._total_spill_cost - sum(
+            self._spill_costs[i] for i in resident_idx
         )
         return utils.to_fixed_us(traffic / self._hbm_bytes_per_us), None
 
@@ -2581,7 +2594,7 @@ class SaCoOptimizingSolver(CoreDivisionLayoutSolver):
         if not self._tilings_are_possible:
             return
         charges: dict[tuple[int, int], int] = {}
-        for run, nbytes in self._companion_charges(self._resident_addresses()):
+        for run, nbytes in self._companion_charges(self._resident_indices()):
             charges[run] = charges.get(run, 0) + nbytes
         tiled = [run for run in self._runs() if not self._tiling_at(run[0]).is_untiled]
         if not tiled:

@@ -324,6 +324,12 @@ class PermutationBasedLayoutSolverBase(ABC):
         self._reflow_eligibility(idx, flag)
         return self.total_quality - old_total
 
+    def allocated_indices(self) -> list[int]:
+        """The buffers holding an address, in index order: what
+        :attr:`addresses` marks not-``None``. The native packer returns them
+        without building an entry for every buffer."""
+        return [i for i, address in enumerate(self.addresses) if address is not None]
+
     def update(
         self,
         resizes: Sequence[tuple[int, int]],
