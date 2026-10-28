@@ -404,6 +404,15 @@ _CSV_COLS = [
     "k_tiles",
     "loop_trips",
     "wd",
+    "rl_src",
+    "rl_dst",
+    "rl_mode",
+    "rl_copies",
+    "rl_split",
+    "rl_run_elems",
+    "rl_cores",
+    "rl_bytes",
+    "rl_pred_us",
     "failed",
 ]
 

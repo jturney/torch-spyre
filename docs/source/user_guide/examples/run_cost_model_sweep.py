@@ -109,6 +109,7 @@ _RECONSTRUCTED = """\
   transpose_outer middle TO_MID                  <- the label
   scratchpad planning    LX_PLANNING             <- the lx field
   matmul layout flag     SPYRE_MATMUL_PREFERRED_LAYOUT <- a `flag[...]` label prefix
+  LX relayout            RL_SRC/RL_DST/RL_MODE   <- rl_src/rl_dst/rl_mode
 """
 
 _LBL_MKN = re.compile(r"\bM=(\d+)\s+K=(\d+)\s+N=(\d+)")
@@ -210,6 +211,10 @@ def _flash_env(r):
     return out
 
 
+#: A `relayout` record's configuration fields (SUMMARY ``rl_*``) and their variables.
+_RELAYOUT_FIELDS = (("rl_src", "RL_SRC"), ("rl_dst", "RL_DST"), ("rl_mode", "RL_MODE"))
+
+
 def _env_from_record(r):
     """The full environment that reproduces one record, or None if it cannot be rebuilt.
 
@@ -237,6 +242,15 @@ def _env_from_record(r):
         if fa is None:
             return None
         env.update(fa)
+        return env
+
+    if op == "relayout":
+        # Both work divisions and the mode ARE the configuration; without any of them
+        # the run measures a different edge (or none) under this record's label.
+        rl = {var: r.get(field) for field, var in _RELAYOUT_FIELDS}
+        if not all(isinstance(v, str) and v for v in rl.values()):
+            return None
+        env.update(rl)
         return env
 
     env.update(_shape_env(r))
