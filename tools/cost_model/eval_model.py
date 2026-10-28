@@ -31,7 +31,9 @@ Feature source per record (in priority order):
      never silently trusted. Matmul is not reconstructed (split-derived features are
      unreliable from I/O alone) -> those rows need a ``feats`` re-run.
 
-``cost_model.py`` imports only ``dataclasses``/``math`` (no torch), so this runs anywhere.
+``cost_model.py`` is imported through its package (it has package-relative imports since
+#3810), with the Spyre backend autoload off: this needs torch_spyre's Python sources and
+its dependencies, but no Spyre card or device runtime.
 
     python tools/cost_model/eval_model.py                         # is_current rows, current params
     python tools/cost_model/eval_model.py --all                   # every row (not just is_current)
@@ -44,7 +46,7 @@ Feature source per record (in priority order):
 
 import argparse
 import collections
-import importlib.util
+import importlib
 import json
 import math
 import os
@@ -60,14 +62,21 @@ _ROOT = os.path.dirname(os.path.dirname(_HERE))  # tools/cost_model/ -> repo roo
 
 
 def _load_cost_model():
-    """Import cost_model.py standalone (it has no torch dependency)."""
-    path = os.path.join(_ROOT, "torch_spyre", "_inductor", "cost_model.py")
-    spec = importlib.util.spec_from_file_location("cost_model", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """Import this checkout's ``torch_spyre._inductor.cost_model``.
+
+    Through the package, because the module has package-relative imports; loading the
+    file on its own fails at import."""
+    if _ROOT not in sys.path:
+        sys.path.insert(0, _ROOT)
+    return importlib.import_module("torch_spyre._inductor.cost_model")
 
 
+if __name__ == "__main__":
+    # The CLI scores records on any host, so keep torch from loading the Spyre backend
+    # (which needs a card and its runtime) when cost_model imports torch_spyre. Only
+    # here: importing this module must not change the importer's environment, which
+    # every later subprocess of, e.g., a pytest session would inherit.
+    os.environ.setdefault("TORCH_DEVICE_BACKEND_AUTOLOAD", "0")
 cm = _load_cost_model()
 
 # op -> reporting category
