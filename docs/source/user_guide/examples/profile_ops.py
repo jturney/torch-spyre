@@ -1090,7 +1090,12 @@ def _run():
     def _profile_once():
         """One profiled trace -> (kernel_us, memset_us, other_us), classified by
         EXCLUSION (a Memset / Memcpy is NOT the fused compute kernel; the new image
-        leaves the kernel event name BLANK, so a name match silently reports 0)."""
+        leaves the kernel event name BLANK, so a name match silently reports 0).
+
+        Only DEVICE events count. The host-side ``launch::Compute`` / ``launch::D2H``
+        / ``launch::H2D`` markers (``RECORD_FUNCTION`` in spyre_stream.cpp) are CPU
+        events, yet the profiler credits each with its device twin's time as "Self
+        SPYRE"; counted, they doubled the kernel and added the output read-back."""
         with profile(
             activities=[ProfilerActivity.CPU, ProfilerActivity.PrivateUse1],
             record_shapes=True,
@@ -1104,7 +1109,7 @@ def _run():
             us = getattr(ev, "self_device_time_total", 0) or getattr(
                 ev, "self_cuda_time_total", 0
             )
-            if not us or us <= 0:
+            if not us or us <= 0 or ev.device_type == torch.autograd.DeviceType.CPU:
                 continue
             key = ev.key or ""
             if "Memset" in key:
