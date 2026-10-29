@@ -578,8 +578,13 @@ def relayout_pairs(rows, params, skipped=None):
                             _relayout_regressors(cyx, params),
                         )
                     ],
-                    "noise_us": sum(
-                        r.get("kernel_us_std") or 0.0 for r in (xy, yx, xx, yy)
+                    # Four independent runs, halved: their spreads add in
+                    # quadrature, not linearly.
+                    "noise_us": math.sqrt(
+                        sum(
+                            (r.get("kernel_us_std") or 0.0) ** 2
+                            for r in (xy, yx, xx, yy)
+                        )
                     )
                     / 2,
                 }

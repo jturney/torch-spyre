@@ -877,7 +877,11 @@ class _BufferResidencyChecks:
             and not config.ktir_emitter
             and prefix_lx_gather_source(self.graph, self.name, self.uses)
             and (
-                (not self.division_is_fixed and self.allocator._decides_lx_relayouts)
+                (
+                    not self.division_is_fixed
+                    and self.allocator._decides_lx_relayouts
+                    and config.lx_solver_relayout
+                )
                 or (
                     self.division_is_fixed
                     and any(

@@ -18,13 +18,26 @@ module, so nothing else in CI notices when it stops loading."""
 
 import importlib.util
 import os
+import sys
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_TOOL_DIR = os.path.join(_ROOT, "tools", "cost_model")
 
 
-def test_eval_model_is_importable():
-    path = os.path.join(_ROOT, "tools", "cost_model", "eval_model.py")
-    spec = importlib.util.spec_from_file_location("eval_model", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    assert callable(mod.main)
+def test_eval_model_is_importable(monkeypatch):
+    # The script puts its own directory and the repo root first on sys.path and
+    # imports its siblings (``records``) as top-level modules. Undo both, so no
+    # later test in this worker resolves an import against the tool directory.
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    before = set(sys.modules)
+    try:
+        path = os.path.join(_TOOL_DIR, "eval_model.py")
+        spec = importlib.util.spec_from_file_location("eval_model", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert callable(mod.main)
+    finally:
+        for name in set(sys.modules) - before:
+            origin = getattr(sys.modules[name], "__file__", None) or ""
+            if os.path.dirname(os.path.abspath(origin)) == _TOOL_DIR:
+                del sys.modules[name]
