@@ -14,8 +14,10 @@
 
 """Offline cost-model accuracy evaluator -- score a model version WITHOUT hardware.
 
-The measured device time (``kernel_us``) is version-INDEPENDENT and already stored in
-``tools/cost_model/sweep_records.json``; only the model's PREDICTION changes when we edit the model.
+The measured device time (``kernel_us``) does not depend on the model version and is
+already stored in ``tools/cost_model/sweep_records.json``; only the model's PREDICTION
+changes when we edit the model. (It does depend on the build that ran and on how the
+harness timed it: see ``_HOST_MARKER_TIMING_SINCE``.)
 So new accuracy is a pure computation: take each run's serialized feature vector, call
 ``cost_model.predict_ops`` with the current (or overridden) params, and compare to the
 stored ``kernel_us``. No Spyre run, and the arithmetic is done by this program -- not by
@@ -299,6 +301,16 @@ _COARSE_OPS = {
 #    correct features yield -51 % on an identical kernel. Rows like that cannot judge the
 #    model in either direction.
 _CORRUPT_FEATURE_SHAS = {"7f37527", "f321503"}
+# 5. Rows timed with the host markers. Since #3424 (merged 2026-08-08) the runtime
+#    records `launch::Compute` / `launch::D2H` / `launch::H2D` as CPU events, and the
+#    profiler credits each with its device twin's time. `profile_ops` counted them as
+#    kernel time until it learned to skip CPU events, so its `kernel_us` read about
+#    twice the kernel plus the output read-back. A SUMMARY from the fixed harness
+#    carries `timing=device`. An unmarked row is scored only if its log is dated before
+#    #3424, when the markers did not exist; the reference database is all from then.
+#    A row with no date at all predates the sweep runner (#3572, 2026-08-14), whose
+#    header always writes one, so it is kept.
+_HOST_MARKER_TIMING_SINCE = "20260808"
 # 4. Rows extracted by the FIRST version of the per-level `loop_factor` code, whose
 #    guard `if syms and not (syms & free)` skipped every level with NO tiled symbols.
 #    An op that tiles NOTHING at a level is loop-INVARIANT there, so all its args
@@ -315,6 +327,15 @@ _DEFAULT_BMM_LAYOUT = "0,1,2"  # the order the compiler emits (config default)
 _SEP_CHAIN = re.compile(r"add\d+_sep")
 
 
+def _host_marker_timed(rec) -> bool:
+    """Whether ``rec``'s ``kernel_us`` may include the launch::* host markers (scope
+    decision 5)."""
+    return (
+        rec.get("timing") != "device"
+        and (rec.get("log_date") or "") >= _HOST_MARKER_TIMING_SINCE
+    )
+
+
 def in_scope(rec) -> bool:
     """False for rows excluded by the standing scope decisions above."""
     try:
@@ -325,6 +346,8 @@ def in_scope(rec) -> bool:
         return False
     sha = rec.get("model_sha") or ""
     if sha in _CORRUPT_FEATURE_SHAS and rec.get("feats"):
+        return False
+    if _host_marker_timed(rec):
         return False
     # NON-DEFAULT BMM OPERAND LAYOUT. A faster device tile order exists (all three
     # operands on [1,0,2], up to 8.3x at byte-identical traffic), but it is reachable by
@@ -878,6 +901,11 @@ def main():
     params = make_params(overrides)
 
     rows = [r for r in records if not r.get("failed") and r.get("kernel_us")]
+    if n := sum(_host_marker_timed(r) for r in rows):
+        print(
+            f"NOTE: {n} rows left out: timed by a harness that counted the launch::* "
+            "host markers (re-measure them; see _HOST_MARKER_TIMING_SINCE)"
+        )
     rows = [r for r in rows if in_scope(r)]
     rows = _select_build(rows, args.build)
     if args.relayout:

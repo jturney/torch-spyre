@@ -1337,7 +1337,11 @@ def _run():
         f"other_dev_us={other:.3f} total_dev_us={kernel + memset + other:.3f} "
         f"kernel_us_min={k_min:.3f} kernel_us_median={k_med:.3f} "
         f"kernel_us_mean={k_mean:.3f} kernel_us_std={k_std:.3f} "
-        f"kernel_us_cv={k_cv:.2f} reps={len(kernels)}" + _relayout_summary(feats)
+        f"kernel_us_cv={k_cv:.2f} reps={len(kernels)}"
+        # `timing=device`: kernel_us counts device events only (see _profile_once).
+        # Earlier harnesses also counted the launch::* host markers, so eval_model
+        # scores an unmarked row only if it predates them.
+        " timing=device" + _relayout_summary(feats)
     )
 
 
