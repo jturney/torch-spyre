@@ -866,7 +866,8 @@ def _relayout_workload():
     """One LX relayout: ``neg`` hinted to RL_SRC feeds ``relu`` hinted to RL_DST.
 
     The pair fuses into one kernel, so the shuffle never gets a profiler event of its
-    own (and since #3741 no build emits one kernel per op). It is isolated instead by
+    own. (A build used to emit one kernel per op under BUNDLE_SYMBOLIC_ARGS=0, the
+    baked-address bundle path; #3741 removed that path.) It is isolated instead by
     the four-run swap estimator, each run its own configuration over the same
     [ROWS, COLS] fp16 tensor, with A and B two divisions::
 
@@ -882,19 +883,36 @@ def _relayout_workload():
 
     Whether a relayout fired is checked after the compile (``_check_relayout``): a run
     whose relayout count is not what its divisions ask for is reported FAILED rather
-    than stored under a label that says otherwise.
+    than stored under a label that says otherwise. That also catches an `off` run
+    whose solve failed: the greedy fallback plans relayouts under
+    SPYRE_LX_PLANNER_RELAYOUT, which this flag does not gate.
     """
     import torch_spyre._inductor.wsr.propagate_named_dims as pnd
     from torch._inductor.codecache import FxGraphCache
     from torch_spyre._inductor import config, spyre_hint
+    from torch_spyre._inductor.scratchpad.allocator import (
+        CoOptimizingAllocator,
+        select_allocator,
+    )
 
     global _PREPARE
     if RL_MODE not in ("on", "off"):
         raise SystemExit(f"RL_MODE={RL_MODE!r} (want on or off)")
     if not config.lx_planning or not config.co_optimizing_lx_planning:
         raise SystemExit(
-            "relayout needs LX_PLANNING=1 and CO_OPTIMIZING_LX_PLANNING=1: only the "
-            "co-optimizing solvers decide relayouts"
+            "relayout needs LX_PLANNING=1 and CO_OPTIMIZING_LX_PLANNING=1: only a "
+            "co-optimizing allocator offers its solver relayouts"
+        )
+    # Ask the allocator the compile will use, so a solver that does not decide
+    # relayouts stops here with its name rather than as a FAILED run per config.
+    allocator = select_allocator()
+    if not (
+        isinstance(allocator, CoOptimizingAllocator)
+        and allocator.layout_planning.decides_lx_relayouts()
+    ):
+        raise SystemExit(
+            f"relayout needs a layout solver that decides LX relayouts; "
+            f"LAYOUT_SOLVER={config.layout_solver!r} does not (use cpsat)"
         )
     # Set from RL_MODE, not left to SPYRE_LX_SOLVER_RELAYOUT, so the mode the record
     # carries is the mode that was measured.
@@ -947,7 +965,10 @@ def _relayout_config_fields() -> str:
     rebuild the configuration of a run that failed."""
     if OP != "relayout":
         return ""
-    return f" rl_src={RL_SRC} rl_dst={RL_DST} rl_mode={RL_MODE}"
+    # `sencores`: the budget, which `cores` (the widest division's count) is not.
+    return (
+        f" rl_src={RL_SRC} rl_dst={RL_DST} rl_mode={RL_MODE} sencores={SENCORES or '-'}"
+    )
 
 
 def _relayout_summary(feats: list) -> str:

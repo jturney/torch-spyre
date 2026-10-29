@@ -480,6 +480,20 @@ def _select_build(rows, spec):
     return kept
 
 
+_LBL_SENCORES = re.compile(r"\bSENCORES=(\d+)\b")
+
+
+def _relayout_sencores(rec):
+    """The SENCORES budget a `relayout` run had: its ``sencores`` field, else the run
+    header's ``SENCORES=`` (logs from before the field), else None. Not ``cores``,
+    which is the widest division's core count, not the budget."""
+    if isinstance(rec.get("sencores"), int):
+        return rec["sencores"]
+    if m := _LBL_SENCORES.search(rec.get("label") or ""):
+        return int(m[1])
+    return None
+
+
 def _relayout_copy(rec):
     """The one LX relayout copy in a `relayout` record's features, or None."""
     copies = [
@@ -544,19 +558,30 @@ def relayout_pairs(rows, params, skipped=None):
     direction) against the model's same difference -- what the layout solver weighs
     when it picks the relayout over spilling the edge.
 
-    A pair is dropped, and counted in ``skipped`` (a ``collections.Counter``) when one
-    is passed, if a cross run lacks exactly one copy or a copy lacks the law's
-    features.
+    Runs pair only within one build, shape, ``lx`` and SENCORES budget. A configuration
+    measured more than once there keeps its last record, and each record it replaces
+    is counted in ``skipped`` (a ``collections.Counter``) when one is passed. So is
+    each pair dropped because a cross run lacks exactly one copy or a copy lacks the
+    law's features.
     """
     skipped = collections.Counter() if skipped is None else skipped
     groups = collections.defaultdict(dict)
     for r in rows:
         if r.get("op") != "relayout" or r.get("feats") is None:
             continue
-        key = (r.get("model_sha"), r.get("rows"), r.get("cols"))
-        groups[key][(r["rl_src"], r["rl_dst"], r["rl_mode"])] = r
+        key = (
+            r.get("model_sha"),
+            r.get("rows"),
+            r.get("cols"),
+            r.get("lx"),
+            _relayout_sencores(r),
+        )
+        config = (r["rl_src"], r["rl_dst"], r["rl_mode"])
+        if config in groups[key]:
+            skipped["run(s) replaced: measured again in one build, last kept"] += 1
+        groups[key][config] = r
     out = []
-    for (sha, nrows, ncols), runs in sorted(groups.items(), key=str):
+    for (sha, nrows, ncols, _, _), runs in sorted(groups.items(), key=str):
         divs = sorted({d for src, dst, _ in runs for d in (src, dst)})
         for x in divs:
             for y in divs:
@@ -568,10 +593,12 @@ def relayout_pairs(rows, params, skipped=None):
                 xy, yx, xx, yy = (runs[k] for k in need)
                 cxy, cyx = _relayout_copy(xy), _relayout_copy(yx)
                 if cxy is None or cyx is None:
-                    skipped["cross run without exactly one copy"] += 1
+                    skipped[
+                        "pair(s) dropped: a cross run without exactly one copy"
+                    ] += 1
                     continue
                 if not (_relayout_priceable(cxy) and _relayout_priceable(cyx)):
-                    skipped["copy without the law's features"] += 1
+                    skipped["pair(s) dropped: a copy without the law's features"] += 1
                     continue
                 meas = (
                     xy["kernel_us"]
@@ -620,11 +647,10 @@ def relayout_pairs(rows, params, skipped=None):
     return out
 
 
-def _physical(fitted):
+def _physical(fitted, p):
     """Why ``fitted`` is not a usable law, or "". The per-run cost
     ``a + b*log2(split)`` must not fall with the split (``b >= 0``) nor go negative
-    anywhere in the measured range, and the walk rate must be positive."""
-    p = cm.CostParams()
+    anywhere in ``p``'s accepted split range, and the walk rate must be positive."""
     a, b, k = (
         fitted["relayout_run_a_ns"],
         fitted["relayout_run_b_ns"],
@@ -710,7 +736,7 @@ def relayout_report(rows, params, fit=False):
     skipped = collections.Counter()
     pairs = relayout_pairs(rows, params, skipped)
     for why, n in sorted(skipped.items()):
-        print(f"skipped {n} pair(s): {why}")
+        print(f"{n} {why}")
     if not pairs:
         print("no complete relayout swap groups (need X->Y, Y->X, X->X and Y->Y runs)")
         return
@@ -778,7 +804,7 @@ def relayout_report(rows, params, fit=False):
     print("\nrefit (relative least squares over every pair):")
     for k, v in fitted.items():
         print(f"  {k} = {v:.4g} +- {stderr[k]:.2g}  (current {getattr(params, k):.4g})")
-    if why := _physical(fitted):
+    if why := _physical(fitted, params):
         print(f"  WARNING: not a physical law ({why}); do not adopt it as is")
     refit = dataclasses.replace(params, **fitted)
     print(f"refit pairs: {_err_summary(_pair_errs(relayout_pairs(rows, refit)))}")

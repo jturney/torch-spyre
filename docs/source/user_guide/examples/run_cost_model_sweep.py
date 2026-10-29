@@ -130,6 +130,7 @@ _LBL_FA = re.compile(
     r"(?:\s+htiles=(\d+))?(?:\s+qtiles=(\d+))?(?:\s+ktiles=(\d+))?"
 )
 _LBL_FA_WD = re.compile(r"\bwd=(\S+)")
+_LBL_SENCORES = re.compile(r"\bSENCORES=(\d+)\b")
 _RUN_HDR = re.compile(r"^===\s+(.*?)\s+===\s*$")
 
 
@@ -251,6 +252,15 @@ def _env_from_record(r):
         if not all(isinstance(v, str) and v for v in rl.values()):
             return None
         env.update(rl)
+        # SENCORES is the budget the divisions are drawn from, and `cores` is the
+        # widest division's count: a 16-core pair swept at SENCORES=32 is a different
+        # run at SENCORES=16. Take the budget from `sencores`, or from the run header.
+        if isinstance(r.get("sencores"), int):
+            env["SENCORES"] = str(r["sencores"])
+        elif m := _LBL_SENCORES.search(r.get("label") or ""):
+            env["SENCORES"] = m[1]
+        else:
+            return None
         return env
 
     env.update(_shape_env(r))
