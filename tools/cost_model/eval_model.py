@@ -531,41 +531,87 @@ def _relayout_regressors(o, params):
     return runs, runs * math.log2(split), per_core * split
 
 
-def _decision(runs, on, off_key, params):
-    """Measured and predicted ``T_off - T_on`` for one direction, or None."""
-    off = runs.get(off_key)
-    if off is None or off.get("feats") is None:
+#: The standard error of the median of n normal draws, over sigma / sqrt(n).
+_MEDIAN_SE = math.sqrt(math.pi / 2)
+
+
+def _pool(records):
+    """One configuration's runs as ``(time_us, se_us, processes)``.
+
+    Each record is one process: one compile and ``reps`` timed repetitions, of which
+    ``kernel_us`` is the median. Several processes give the mean of their medians and
+    its standard error from their spread, which includes everything that differs
+    between processes (the compile, the solver's plan, the device's state). One
+    process gives only the standard error of its median from the spread of its
+    repetitions, a lower bound: it cannot see a difference between processes."""
+    times = [r["kernel_us"] for r in records]
+    n = len(times)
+    if n >= 2:
+        mean = sum(times) / n
+        sd = math.sqrt(sum((t - mean) ** 2 for t in times) / (n - 1))
+        return mean, sd / math.sqrt(n), n
+    rec = records[0]
+    reps = max(1, int(rec.get("reps") or 1))
+    return times[0], _MEDIAN_SE * (rec.get("kernel_us_std") or 0.0) / math.sqrt(reps), 1
+
+
+def _decision(runs, on_us, off_key, params):
+    """Measured and predicted ``T_off - T_on`` for one direction, or None. ``on_us``
+    is the pooled time of the `on` run, ``runs[off_key]`` the off run's records."""
+    offs = runs.get(off_key)
+    if not offs:
         return None
-    on_ops = [cm.op_from_dict(d) for d in on["feats"]]
-    off_ops = [cm.op_from_dict(d) for d in off["feats"]]
+    on_key = (off_key[0], off_key[1], "on")
+    on_ops = [cm.op_from_dict(d) for d in runs[on_key][0]["feats"]]
+    off_ops = [cm.op_from_dict(d) for d in offs[0]["feats"]]
     return (
-        off["kernel_us"] - on["kernel_us"],
+        _pool(offs)[0] - on_us,
         (cm.predict_ops(off_ops, params) - cm.predict_ops(on_ops, params)) / 1000,
     )
 
 
-def relayout_pairs(rows, params, skipped=None):
+def _one_copy(records, params):
+    """The cross run's copy, or a reason it has none usable: every repeat must carry
+    exactly one copy, and the same one (the solver may plan differently between
+    processes, and then the repeats are not one measurement)."""
+    copies = [_relayout_copy(r) for r in records]
+    if any(c is None for c in copies):
+        return None, "pair(s) dropped: a cross run without exactly one copy"
+    first = copies[0]
+    shape = (first.relayout_split, _relayout_regressors(first, params))
+    if any(
+        (c.relayout_split, _relayout_regressors(c, params)) != shape for c in copies
+    ):
+        return None, "pair(s) dropped: the copy differs between repeats"
+    if not _relayout_priceable(first):
+        return None, "pair(s) dropped: a copy without the law's features"
+    return first, ""
+
+
+def relayout_pairs(rows, params, notes=None):
     """Measured vs predicted LX shuffle, one entry per swap pair.
 
     The `relayout` sweep measures each division pair X != Y of one [rows, cols] tensor
     four ways (see ``profile_ops._relayout_workload``); the producer and consumer work
     cancel in ``(T[X->Y] + T[Y->X] - T[X->X] - T[Y->Y]) / 2``, which leaves the mean of
     the two shuffles. The prediction is the mean of ``relayout_ns`` over the two copies'
-    stored features under ``params``. Runs from different builds are never paired.
+    stored features under ``params``.
+
+    Runs pair only within one build, shape, ``lx`` and SENCORES budget. A configuration
+    measured in several processes there is pooled (``_pool``), so its repeats set the
+    pair's ``noise_us``: the four runs' standard errors in quadrature, halved.
+    ``repeats`` is the fewest processes behind any of the four.
 
     Also returned per pair, when an RL_MODE=off run of either direction exists: the
     decision quantity, measured ``T_off - T_on`` (each against the `on` run of its own
     direction) against the model's same difference -- what the layout solver weighs
     when it picks the relayout over spilling the edge.
 
-    Runs pair only within one build, shape, ``lx`` and SENCORES budget. A configuration
-    measured more than once there keeps its last record, and each record it replaces
-    is counted in ``skipped`` (a ``collections.Counter``) when one is passed. So is
-    each pair dropped because a cross run lacks exactly one copy or a copy lacks the
-    law's features.
+    ``notes`` (a ``collections.Counter``), when passed, counts the pooled
+    configurations and each pair dropped, by reason.
     """
-    skipped = collections.Counter() if skipped is None else skipped
-    groups = collections.defaultdict(dict)
+    notes = collections.Counter() if notes is None else notes
+    groups = collections.defaultdict(lambda: collections.defaultdict(list))
     for r in rows:
         if r.get("op") != "relayout" or r.get("feats") is None:
             continue
@@ -576,12 +622,12 @@ def relayout_pairs(rows, params, skipped=None):
             r.get("lx"),
             _relayout_sencores(r),
         )
-        config = (r["rl_src"], r["rl_dst"], r["rl_mode"])
-        if config in groups[key]:
-            skipped["run(s) replaced: measured again in one build, last kept"] += 1
-        groups[key][config] = r
+        groups[key][(r["rl_src"], r["rl_dst"], r["rl_mode"])].append(r)
     out = []
     for (sha, nrows, ncols, _, _), runs in sorted(groups.items(), key=str):
+        for records in runs.values():
+            if len(records) > 1:
+                notes["configuration(s) measured in several processes: pooled"] += 1
         divs = sorted({d for src, dst, _ in runs for d in (src, dst)})
         for x in divs:
             for y in divs:
@@ -590,22 +636,15 @@ def relayout_pairs(rows, params, skipped=None):
                 need = [(x, y, "on"), (y, x, "on"), (x, x, "on"), (y, y, "on")]
                 if not all(k in runs for k in need):
                     continue
-                xy, yx, xx, yy = (runs[k] for k in need)
-                cxy, cyx = _relayout_copy(xy), _relayout_copy(yx)
+                (cxy, why_xy), (cyx, why_yx) = (
+                    _one_copy(runs[k], params) for k in need[:2]
+                )
                 if cxy is None or cyx is None:
-                    skipped[
-                        "pair(s) dropped: a cross run without exactly one copy"
-                    ] += 1
+                    notes[why_xy or why_yx] += 1
                     continue
-                if not (_relayout_priceable(cxy) and _relayout_priceable(cyx)):
-                    skipped["pair(s) dropped: a copy without the law's features"] += 1
-                    continue
-                meas = (
-                    xy["kernel_us"]
-                    + yx["kernel_us"]
-                    - xx["kernel_us"]
-                    - yy["kernel_us"]
-                ) / 2
+                (txy, sxy, nxy), (tyx, syx, nyx), (txx, sxx, nxx), (tyy, syy, nyy) = (
+                    _pool(runs[k]) for k in need
+                )
                 pred = (
                     cm.relayout_ns(cxy, params) + cm.relayout_ns(cyx, params)
                 ) / 2000
@@ -619,7 +658,7 @@ def relayout_pairs(rows, params, skipped=None):
                     "bytes_per_core": cxy.out_elems
                     * cxy.dtype_bytes
                     / (cxy.relayout_cores or cxy.cores),
-                    "meas_us": meas,
+                    "meas_us": (txy + tyx - txx - tyy) / 2,
                     "pred_us": pred,
                     "regressors": [
                         (u + v) / 2
@@ -628,18 +667,13 @@ def relayout_pairs(rows, params, skipped=None):
                             _relayout_regressors(cyx, params),
                         )
                     ],
-                    # Four independent runs, halved: their spreads add in
+                    # Four independent estimates, halved: their errors add in
                     # quadrature, not linearly.
-                    "noise_us": math.sqrt(
-                        sum(
-                            (r.get("kernel_us_std") or 0.0) ** 2
-                            for r in (xy, yx, xx, yy)
-                        )
-                    )
-                    / 2,
+                    "noise_us": math.sqrt(sxy**2 + syx**2 + sxx**2 + syy**2) / 2,
+                    "repeats": min(nxy, nyx, nxx, nyy),
                 }
-                decision = _decision(runs, xy, (x, y, "off"), params) or _decision(
-                    runs, yx, (y, x, "off"), params
+                decision = _decision(runs, txy, (x, y, "off"), params) or _decision(
+                    runs, tyx, (y, x, "off"), params
                 )
                 if decision is not None:
                     pair["decision_meas_us"], pair["decision_pred_us"] = decision
@@ -667,17 +701,31 @@ def _physical(fitted, p):
     return "; ".join(why)
 
 
-def fit_relayout(pairs):
-    """Least-squares ``(a, b, K)`` for the law over ``pairs``, on RELATIVE error (each
-    pair weighted by 1/measured), since the shuffles span two orders of magnitude and
-    an absolute fit would answer only to the largest. The law is linear in
-    ``(a, b, 1/K)``, so this is one ``lstsq``, not an iteration.
+#: ``fit_relayout`` weightings: the pairs each uses, and each pair's weight.
+_FIT_WEIGHTS = {
+    # Relative error: every pair counts alike whatever its size. Right only if the
+    # noise grows with the shuffle, which the four-run estimate's does not.
+    "relative": (lambda p: p["meas_us"] > 0, lambda p: 1 / p["meas_us"]),
+    # Inverse noise: each pair counts by how well it is measured. A pair whose
+    # shuffle came out <= 0 is still a measurement here, not a missing point.
+    "noise": (lambda p: p["noise_us"] > 0, lambda p: 1 / p["noise_us"]),
+}
+
+
+def fit_relayout(pairs, weight="noise"):
+    """Weighted least-squares ``(a, b, K)`` for the law over ``pairs``, each residual
+    multiplied by ``_FIT_WEIGHTS[weight]``: 1/noise (default), so the fit's chi^2 is
+    the usual one, or 1/measured. The law is linear in ``(a, b, 1/K)``, so this is one
+    ``lstsq``, not an iteration.
 
     Returns ``(fitted, stderr)``: the three ``CostParams`` fields and their standard
-    errors. Nothing here judges whether the result is physical; see ``_physical``."""
+    errors, scaled by the residual variance per degree of freedom so that a fit worse
+    than the noise widens them rather than hiding it. Nothing here judges whether the
+    result is physical; see ``_physical``."""
     import torch
 
-    use = [p for p in pairs if p["meas_us"] > 0]
+    usable, w = _FIT_WEIGHTS[weight]
+    use = [p for p in pairs if usable(p)]
     splits = sorted({p["split"] for p in use})
     if len(splits) < 2:
         # At one split log2(split) is a constant, so `a` and `b` are collinear and a
@@ -686,10 +734,10 @@ def fit_relayout(pairs):
             f"a fit needs pairs at two or more governing splits (have {splits})"
         )
     design = torch.tensor(
-        [[x / (p["meas_us"] * 1000) for x in p["regressors"]] for p in use],
+        [[x * w(p) / 1000 for x in p["regressors"]] for p in use],
         dtype=torch.float64,
     )
-    target = torch.ones(len(use), 1, dtype=torch.float64)  # meas / meas
+    target = torch.tensor([[p["meas_us"] * w(p)] for p in use], dtype=torch.float64)
     if int(torch.linalg.matrix_rank(design)) < 3:
         raise ValueError("singular fit: the pairs do not separate a, b and K")
     coef = torch.linalg.lstsq(design, target, driver="gelsd").solution.squeeze(1)
@@ -713,6 +761,19 @@ def fit_relayout(pairs):
     return fitted, stderr
 
 
+def _chi2(pairs, fitted_params=0):
+    """``(chi^2 per degree of freedom, pairs within 2 sigma, pairs used)`` of the
+    prediction against the measurement, in units of each pair's noise. About 1 when
+    the law is right and the noise is all there is; ``fitted_params`` is how many
+    of the law's constants were fitted to these same pairs."""
+    use = [p for p in pairs if p["noise_us"] > 0]
+    if not use:
+        return float("nan"), 0, 0
+    z = [(p["pred_us"] - p["meas_us"]) / p["noise_us"] for p in use]
+    dof = max(1, len(use) - fitted_params)
+    return sum(v * v for v in z) / dof, sum(abs(v) <= 2 for v in z), len(use)
+
+
 def _err_summary(errs):
     if not errs:
         return "n=0"
@@ -730,12 +791,18 @@ def _pair_errs(pairs):
     ]
 
 
+def _noise_summary(pairs, fitted_params=0):
+    chi2, within, n = _chi2(pairs, fitted_params)
+    return f"chi2/dof {chi2:.2f}, {within} of {n} within 2 sigma"
+
+
 def relayout_report(rows, params, fit=False):
     """Print the relayout validation: the shuffle per pair, by split, and the decision
-    quantity; with ``fit``, the refit parameters and the same table under them."""
-    skipped = collections.Counter()
-    pairs = relayout_pairs(rows, params, skipped)
-    for why, n in sorted(skipped.items()):
+    quantity; with ``fit``, the refit parameters under each weighting and the pairs
+    under them."""
+    notes = collections.Counter()
+    pairs = relayout_pairs(rows, params, notes)
+    for why, n in sorted(notes.items()):
         print(f"{n} {why}")
     if not pairs:
         print("no complete relayout swap groups (need X->Y, Y->X, X->X and Y->Y runs)")
@@ -745,7 +812,8 @@ def relayout_report(rows, params, fit=False):
     )
     print(
         f"{'shape':>12} {'X':>6} {'Y':>9} {'split':>5} {'run':>6} {'KiB/core':>8} "
-        f"{'meas_us':>8} {'+-us':>5} {'pred_us':>8} {'err%':>7}  {'decision m/p us':>16}"
+        f"{'n':>2} {'meas_us':>8} {'+-us':>5} {'pred_us':>8} {'err%':>7}  "
+        f"{'decision m/p us':>16}"
     )
     by_split = collections.defaultdict(list)
     for p in sorted(pairs, key=lambda p: (p["shape"], p["split"])):
@@ -763,8 +831,8 @@ def relayout_report(rows, params, fit=False):
         print(
             f"{p['shape'][0]:>5}x{p['shape'][1]:<6} {p['x']:>6} {p['y']:>9} "
             f"{p['split']:>5} {p['run_elems']:>6} {p['bytes_per_core'] / 1024:>8.0f} "
-            f"{p['meas_us']:>8.2f} {p['noise_us']:>5.2f} {p['pred_us']:>8.2f} "
-            f"{err}  {dec:>16}"
+            f"{p['repeats']:>2} {p['meas_us']:>8.2f} {p['noise_us']:>5.2f} "
+            f"{p['pred_us']:>8.2f} {err}  {dec:>16}"
         )
     noise = sum(p["meas_us"] <= 0 for p in pairs)
     print(f"\nall pairs: {_err_summary(_pair_errs(pairs))}")
@@ -772,6 +840,15 @@ def relayout_report(rows, params, fit=False):
         print(f"  ({noise} pair(s) left out: estimated shuffle <= 0, below the noise)")
     for split in sorted(by_split):
         print(f"  split {split:>2}: {_err_summary(_pair_errs(by_split[split]))}")
+    rel = sorted(p["noise_us"] / p["meas_us"] * 100 for p in pairs if p["meas_us"] > 0)
+    if rel:
+        print(f"noise: median {rel[len(rel) // 2]:.1f}% of the shuffle")
+    print(f"law vs noise: {_noise_summary(pairs)}")
+    if single := sum(p["repeats"] < 2 for p in pairs):
+        print(
+            f"  ({single} pair(s) rest on a run measured in one process: their noise "
+            "is the within-process spread only, a lower bound)"
+        )
     dec = [p for p in pairs if "decision_meas_us" in p]
     if dec:
         derr = [
@@ -796,18 +873,24 @@ def relayout_report(rows, params, fit=False):
             )
     if not fit:
         return
-    try:
-        fitted, stderr = fit_relayout(pairs)
-    except ValueError as exc:
-        print(f"\nno refit: {exc}")
-        return
-    print("\nrefit (relative least squares over every pair):")
-    for k, v in fitted.items():
-        print(f"  {k} = {v:.4g} +- {stderr[k]:.2g}  (current {getattr(params, k):.4g})")
-    if why := _physical(fitted, params):
-        print(f"  WARNING: not a physical law ({why}); do not adopt it as is")
-    refit = dataclasses.replace(params, **fitted)
-    print(f"refit pairs: {_err_summary(_pair_errs(relayout_pairs(rows, refit)))}")
+    for weight in _FIT_WEIGHTS:
+        try:
+            fitted, stderr = fit_relayout(pairs, weight)
+        except ValueError as exc:
+            print(f"\nno refit ({weight} weights): {exc}")
+            continue
+        print(f"\nrefit ({weight} weights):")
+        for k, v in fitted.items():
+            print(
+                f"  {k} = {v:.4g} +- {stderr[k]:.2g}  (current {getattr(params, k):.4g})"
+            )
+        if why := _physical(fitted, params):
+            print(f"  WARNING: not a physical law ({why}); do not adopt it as is")
+        refit = relayout_pairs(rows, dataclasses.replace(params, **fitted))
+        print(
+            f"  refit pairs: {_err_summary(_pair_errs(refit))}; "
+            f"{_noise_summary(refit, fitted_params=3)}"
+        )
 
 
 def plot_scatter(evaluated, out_path):
