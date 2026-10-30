@@ -173,12 +173,12 @@ lx_extended_ownership: bool = os.getenv("SPYRE_LX_EXTENDED_OWNERSHIP", "1").lowe
     "yes",
 )
 
-# Let a co-optimizing solver that decides LX relayouts (decides_lx_relayouts();
-# today only CP-SAT) choose them. Set SPYRE_LX_SOLVER_RELAYOUT=0 to offer it no
-# relayout candidates, so an edge whose views differ spills to HBM, and nothing
-# else about the plan changes; unlike SPYRE_LX_PLANNER_RELAYOUT=0, which also turns
-# off restickify residency and fused-axis views. It does not gate the greedy
-# fallback after a failed solve, which plans relayouts under
+# Let a co-optimizing solver that decides LX relayouts (one whose
+# decides_lx_relayouts() is true) choose them. Set SPYRE_LX_SOLVER_RELAYOUT=0 to
+# offer it no relayout candidates, so an edge whose views differ spills to HBM, and
+# nothing else about the plan changes; unlike SPYRE_LX_PLANNER_RELAYOUT=0, which
+# also turns off restickify residency and fused-axis views. It does not gate the
+# greedy fallback after a failed solve, which plans relayouts under
 # SPYRE_LX_PLANNER_RELAYOUT. For measuring what a relayout is worth (the cost-model
 # sweep's `relayout` op) and for tests that need the spill side of an edge.
 lx_solver_relayout: bool = os.getenv("SPYRE_LX_SOLVER_RELAYOUT", "1").lower() in (
